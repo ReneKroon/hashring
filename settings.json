@@ -1,0 +1,12 @@
+{
+    "protoc": {
+        "path": "C:\\Users\\dmesg\\go\\bin",
+        "compile_on_save": true,
+        "options": [
+            "--proto_path=protos/v3",
+            "--proto_path=${workspaceRoot}",
+            "--proto_path=${env.GOPATH}/include",
+            "--java_out=gen/go"
+        ]
+    }
+}

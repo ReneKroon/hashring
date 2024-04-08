@@ -1,0 +1,27 @@
+ message Key {
+    required string key = 1;
+}
+
+message Data {
+    required bool found = 1;
+    optional string data =2;
+}
+
+message KeyData {
+    required string key = 1;
+    required string data = 2;
+ 
+}
+
+message UpdateStatus {
+    required bool ok = 1;
+    optional string err = 2;
+}
+
+service HashStore {
+
+
+	rpc Get( Key) returns ( Data) {}
+	rpc Put( KeyData) returns (UpdateStatus) {}
+	rpc Remove( Key)    returns (UpdateStatus) {}
+}
