@@ -8,6 +8,6 @@ import (
 )
 
 func TestNewRing(t *testing.T) {
-	internal.NewRing([]netip.AddrPort{})
+	internal.NewRing([]netip.AddrPort{}, netip.MustParseAddrPort("192.168.0.1:7070"))
 
 }

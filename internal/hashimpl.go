@@ -1,8 +1,6 @@
 package internal
 
 import (
-	"encoding/binary"
-	"fmt"
 	"hash/crc32"
 	"net/netip"
 
@@ -16,18 +14,17 @@ func NewHasher() hashring.Hasher {
 	return HashCrc32{}
 }
 
-func (h HashCrc32) Hash(key []byte) []byte {
+func (h HashCrc32) Hash(key []byte) uint32 {
 	crc := crc32.NewIEEE()
 	crc.Write(key)
-	a := make([]byte, 4)
-	binary.LittleEndian.PutUint32(a, crc.Sum32())
-	return a
+
+	return crc.Sum32()
 }
 
-func (h HashCrc32) HashPeer(peer netip.AddrPort) []byte {
-	return h.Hash([]byte(fmt.Sprintf("%s", peer)))
+func (h HashCrc32) HashPeer(peer netip.AddrPort) uint32 {
+	return h.Hash([]byte(peer.String()))
 }
 
-func (h HashCrc32) HashString(s string) []byte {
+func (h HashCrc32) HashString(s string) uint32 {
 	return h.Hash([]byte(s))
 }

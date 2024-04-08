@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"log"
 	"net"
@@ -14,25 +15,25 @@ import (
 
 var ringInfo hashring.Ring
 
+var port = flag.Int("port", 7070, "Set the port to listen to for this server")
+
 // https://grpc.io/docs/languages/go/basics/
 func main() {
+	flag.Parse()
 
-	port := 7070
 	address := GetLocalIP()
-	h := fmt.Sprintf("%s:%d", address, port)
-	ip, err := netip.ParseAddrPort(h)
-	if err != nil {
-		panic(err)
-	}
 
-	lis, err := net.Listen("tcp", fmt.Sprintf(h))
+	ip := netip.AddrPortFrom(netip.AddrFrom4([4]byte(address.To4())), uint16(*port))
+
+	lis, err := net.Listen("tcp", fmt.Sprintf(ip.String()))
 	if err != nil {
 		log.Fatalf("failed to listen: %v", err)
 	}
 	log.Println("listening on :", ip)
 	var opts []grpc.ServerOption
 
-	ring := internal.NewRing([]netip.AddrPort{ip})
+	home := netip.AddrPortFrom(netip.AddrFrom4([4]byte(address.To4())), 7070)
+	ring := internal.NewRing([]netip.AddrPort{ip, home}, ip)
 
 	grpcServer := grpc.NewServer(opts...)
 	proto.RegisterHashStoreServer(grpcServer, ring)
@@ -42,18 +43,18 @@ func main() {
 }
 
 // GetLocalIP returns the non loopback local IP of the host
-func GetLocalIP() string {
+func GetLocalIP() net.IP {
 	addrs, err := net.InterfaceAddrs()
 	if err != nil {
-		return ""
+		panic("No available local ips")
 	}
 	for _, address := range addrs {
 		// check the address type and if it is not a loopback the display it
-		if ipnet, ok := address.(*net.IPNet); ok && !ipnet.IP.IsLoopback() && !ipnet.IP.IsUnspecified() && !ipnet.IP.IsLinkLocalUnicast() {
+		if ipnet, ok := address.(*net.IPNet); ok && !(ipnet.IP.IsLoopback() || ipnet.IP.IsUnspecified() || ipnet.IP.IsLinkLocalUnicast()) {
 			if ipnet.IP.To4() != nil {
-				return ipnet.IP.String()
+				return ipnet.IP
 			}
 		}
 	}
-	return ""
+	panic("No available local ips")
 }

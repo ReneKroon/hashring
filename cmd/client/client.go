@@ -12,12 +12,14 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
+var port = flag.Int("port", 7070, "Set the port to listen to for this server")
+
 func main() {
 
 	flag.Parse()
 	var opts []grpc.DialOption
 
-	var server = fmt.Sprintf("%s:7070", GetLocalIP())
+	var server = fmt.Sprintf("%s:%d", GetLocalIP(), *port)
 	opts = append(opts, grpc.WithTransportCredentials(insecure.NewCredentials()))
 
 	conn, err := grpc.NewClient(server, opts...)
@@ -27,12 +29,15 @@ func main() {
 	defer conn.Close()
 	client := proto.NewHashStoreClient(conn)
 
-	dataToPut := proto.KeyData{Key: "test", Data: "data"}
-	client.Put(context.Background(), &dataToPut)
-	data, err := client.Get(context.Background(), &proto.Key{Key: "test"})
+	for i := 0; ; i++ {
+		dataToPut := proto.KeyData{Key: fmt.Sprintf("test%d", i), Data: "data"}
+		client.Put(context.Background(), &dataToPut)
+		data, err := client.Get(context.Background(), &proto.Key{Key: "test"})
 
-	fmt.Println(err)
-	fmt.Println(*data.Data)
+		fmt.Println(err)
+		fmt.Println(*data.Data)
+		i++
+	}
 }
 
 // GetLocalIP returns the non loopback local IP of the host

@@ -24,8 +24,6 @@ message UpdateStatus {
 }
 
 service HashStore {
-
-
 	rpc Get( Key) returns ( Data) {}
 	rpc Put( KeyData) returns (UpdateStatus) {}
 	rpc Remove( Key)    returns (UpdateStatus) {}
