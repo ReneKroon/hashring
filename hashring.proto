@@ -1,20 +1,25 @@
+//protoc hashring.proto --go-grpc_out=./ --go_out=./
+syntax = "proto3";
+
+option go_package = "./proto";
+ 
  message Key {
-    required string key = 1;
+     string key = 1;
 }
 
 message Data {
-    required bool found = 1;
+     bool found = 1;
     optional string data =2;
 }
 
 message KeyData {
-    required string key = 1;
-    required string data = 2;
+     string key = 1;
+     string data = 2;
  
 }
 
 message UpdateStatus {
-    required bool ok = 1;
+     bool ok = 1;
     optional string err = 2;
 }
 

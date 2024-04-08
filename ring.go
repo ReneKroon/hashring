@@ -1,7 +1,10 @@
 package hashring
 
+import "github.com/ReneKroon/hashring/proto"
+
 type Ring interface {
 	Node
-	ClientKey
+	//ClientKey
 	Hasher
+	proto.HashStoreServer
 }
