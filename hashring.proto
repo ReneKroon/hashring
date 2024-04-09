@@ -1,6 +1,8 @@
 //protoc hashring.proto --go-grpc_out=./ --go_out=./
 syntax = "proto3";
 
+import "google/protobuf/empty.proto";
+
 option go_package = "./proto";
  
  message Key {
@@ -23,8 +25,23 @@ message UpdateStatus {
     optional string err = 2;
 }
 
+message Node {
+     string host = 1;
+     uint32 port = 2;
+}
+
+message NodeList {
+     repeated Node node = 1;
+}
+
 service HashStore {
 	rpc Get( Key) returns ( Data) {}
 	rpc Put( KeyData) returns (UpdateStatus) {}
 	rpc Remove( Key)    returns (UpdateStatus) {}
+}
+
+service NodeStatus {
+     rpc AddNode( Node ) returns ( google.protobuf.Empty ) {}
+     rpc GetNodeList( google.protobuf.Empty ) returns (NodeList) {}
+     rpc RemoveNode(Node ) returns ( google.protobuf.Empty) {}
 }

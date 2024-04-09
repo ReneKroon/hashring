@@ -33,10 +33,15 @@ func main() {
 	var opts []grpc.ServerOption
 
 	home := netip.AddrPortFrom(netip.AddrFrom4([4]byte(address.To4())), 7070)
-	ring := internal.NewRing([]netip.AddrPort{ip, home}, ip)
+
+	hasher := internal.NewHasher()
+	node := internal.NewNodeImpl([]netip.AddrPort{ip, home}, ip, hasher)
+
+	ring := internal.NewRing(node, hasher)
 
 	grpcServer := grpc.NewServer(opts...)
 	proto.RegisterHashStoreServer(grpcServer, ring)
+	proto.RegisterNodeStatusServer(grpcServer, node)
 
 	grpcServer.Serve(lis)
 

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"time"
 
 	"github.com/ReneKroon/hashring/proto"
 	"google.golang.org/grpc"
@@ -30,13 +31,23 @@ func main() {
 	client := proto.NewHashStoreClient(conn)
 
 	for i := 0; ; i++ {
-		dataToPut := proto.KeyData{Key: fmt.Sprintf("test%d", i), Data: "data"}
+		key := fmt.Sprintf("test%d", i)
+		dataToPut := proto.KeyData{Key: key, Data: "data"}
 		client.Put(context.Background(), &dataToPut)
-		data, err := client.Get(context.Background(), &proto.Key{Key: "test"})
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		if data, err := client.Get(ctx, &proto.Key{Key: key}); err == nil {
+			if data.Found {
+				fmt.Println(*data.Data)
+			} else {
+				fmt.Println("Not found")
+			}
+		} else {
 
-		fmt.Println(err)
-		fmt.Println(*data.Data)
+			fmt.Println(err)
+		}
+		cancel()
 		i++
+		time.Sleep(time.Millisecond * 50)
 	}
 }
 

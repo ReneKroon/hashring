@@ -3,7 +3,6 @@ package internal
 import (
 	"context"
 	"log"
-	"net/netip"
 
 	"github.com/ReneKroon/hashring"
 	"github.com/ReneKroon/hashring/proto"
@@ -14,13 +13,10 @@ type SingleRing struct {
 	hashring.Node
 	k hashring.ServerKey
 	proto.UnimplementedHashStoreServer
-	selfHash uint32
 }
 
-func NewRing(seeds []netip.AddrPort, self netip.AddrPort) hashring.Ring {
+func NewRing(node hashring.Node, hasher hashring.Hasher) hashring.Ring {
 
-	hasher := NewHasher()
-	node := NewNodeImpl(seeds, self, hasher)
 	keys := NewKeyImpl()
 
 	return SingleRing{
@@ -29,7 +25,6 @@ func NewRing(seeds []netip.AddrPort, self netip.AddrPort) hashring.Ring {
 		node,
 		keys,
 		proto.UnimplementedHashStoreServer{},
-		hasher.HashPeer(self),
 	}
 }
 
@@ -38,7 +33,9 @@ func (r SingleRing) Get(ctx context.Context, k *proto.Key) (*proto.Data, error) 
 	p := &proto.Data{}
 
 	if client, self := r.GetNode(k.Key); self {
+
 		p.Data, p.Found = r.k.Get(k.Key)
+		log.Println("Retrieving a key ", k.Key, p.Data, p.Found)
 		return p, nil
 	} else {
 		return client.Get(context.Background(), k)
