@@ -6,6 +6,9 @@ import (
 	"log"
 	"net"
 	"net/netip"
+	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/ReneKroon/hashring"
 	"github.com/ReneKroon/hashring/internal"
@@ -35,7 +38,7 @@ func main() {
 	home := netip.AddrPortFrom(netip.AddrFrom4([4]byte(address.To4())), 7070)
 
 	hasher := internal.NewHasher()
-	node := internal.NewNodeImpl([]netip.AddrPort{ip, home}, ip, hasher)
+	node := internal.NewNodeImpl([]netip.AddrPort{home}, ip, hasher)
 
 	ring := internal.NewRing(node, hasher)
 
@@ -43,6 +46,20 @@ func main() {
 	proto.RegisterHashStoreServer(grpcServer, ring)
 	proto.RegisterNodeStatusServer(grpcServer, node)
 
+	sigs := make(chan os.Signal, 1)
+
+	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+
+	go func() {
+
+		sig := <-sigs
+		fmt.Println("Caught signal")
+		fmt.Println()
+		fmt.Println(sig)
+		node.Shutdown()
+		grpcServer.Stop()
+
+	}()
 	grpcServer.Serve(lis)
 
 }

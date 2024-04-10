@@ -13,5 +13,6 @@ type Node interface {
 	//GetNodeList() map[netip.AddrPort][]byte
 	GetNode(key string) (proto.HashStoreClient, bool)
 	GetSelf() (peer netip.AddrPort)
+	Shutdown()
 	proto.NodeStatusServer
 }

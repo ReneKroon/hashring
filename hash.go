@@ -6,4 +6,5 @@ import "net/netip"
 type Hasher interface {
 	HashPeer(peer netip.AddrPort) uint32
 	HashString(key string) uint32
+	GetNodeForHash(crc32 uint32, peerList []uint32, self uint32) (uint32, bool)
 }

@@ -38,7 +38,7 @@ func (r SingleRing) Get(ctx context.Context, k *proto.Key) (*proto.Data, error) 
 		log.Println("Retrieving a key ", k.Key, p.Data, p.Found)
 		return p, nil
 	} else {
-		return client.Get(context.Background(), k)
+		return client.Get(ctx, k)
 	}
 
 }
@@ -55,7 +55,11 @@ func (r SingleRing) Put(ctx context.Context, k *proto.KeyData) (*proto.UpdateSta
 		p.Ok = true
 		return p, nil
 	} else {
-		return client.Put(context.Background(), k)
+		log.Println("forward ", k.Key)
+		if client == nil || k == nil {
+			panic("client and data should always exist for not self node")
+		}
+		return client.Put(ctx, k)
 	}
 
 }
@@ -67,6 +71,6 @@ func (r SingleRing) Remove(ctx context.Context, k *proto.Key) (*proto.UpdateStat
 		p.Ok = true
 		return p, nil
 	} else {
-		return client.Remove(context.Background(), k)
+		return client.Remove(ctx, k)
 	}
 }

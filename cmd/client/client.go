@@ -32,10 +32,9 @@ func main() {
 
 	for i := 0; ; i++ {
 		key := fmt.Sprintf("test%d", i)
-		dataToPut := proto.KeyData{Key: key, Data: "data"}
-		client.Put(context.Background(), &dataToPut)
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-		if data, err := client.Get(ctx, &proto.Key{Key: key}); err == nil {
+		slowPut(client, key, "data")
+
+		if data, err := slowGet(client, key); err == nil {
 			if data.Found {
 				fmt.Println(*data.Data)
 			} else {
@@ -45,10 +44,23 @@ func main() {
 
 			fmt.Println(err)
 		}
-		cancel()
+
 		i++
-		time.Sleep(time.Millisecond * 50)
+		time.Sleep(time.Millisecond * 150)
 	}
+}
+
+func slowPut(client proto.HashStoreClient, key string, data string) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	dataToPut := proto.KeyData{Key: key, Data: "data"}
+	client.Put(ctx, &dataToPut)
+}
+
+func slowGet(client proto.HashStoreClient, key string) (*proto.Data, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	return client.Get(ctx, &proto.Key{Key: key})
 }
 
 // GetLocalIP returns the non loopback local IP of the host

@@ -4,8 +4,9 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"math"
 	"net/netip"
+	"sync"
+	"time"
 
 	"github.com/ReneKroon/hashring"
 	"github.com/ReneKroon/hashring/proto"
@@ -65,7 +66,7 @@ func (n *NodeImpl) AddNode(ctx context.Context, node *proto.Node) (*emptypb.Empt
 	if peer, err := netip.ParseAddrPort(fmt.Sprintf("%s:%d", node.Host, node.Port)); err == nil {
 		client := createClient(peer)
 		n.peerList[n.HashPeer(peer)] = client
-		client.AddNode(context.Background(), &proto.Node{Host: n.self.Addr().String(), Port: uint32(n.self.Port())})
+		client.AddNode(ctx, &proto.Node{Host: n.self.Addr().String(), Port: uint32(n.self.Port())})
 	}
 
 	return &emptypb.Empty{}, nil
@@ -83,11 +84,15 @@ func (n *NodeImpl) GetNodeList(context.Context, *emptypb.Empty) (*proto.NodeList
 }
 
 func (n *NodeImpl) RemoveNode(ctx context.Context, node *proto.Node) (*emptypb.Empty, error) {
-	if peer, err := netip.ParseAddrPort(fmt.Sprintf("%s:%d", node.Host, node.Port)); err == nil {
-		if v, ok := n.peerList[n.HashPeer(peer)]; ok {
-			v.Close()
 
+	if peer, err := netip.ParseAddrPort(fmt.Sprintf("%s:%d", node.Host, node.Port)); err == nil {
+		log.Println("Removing a node ", peer.String())
+		if v, ok := n.peerList[n.HashPeer(peer)]; ok {
 			delete(n.peerList, n.HashPeer(peer))
+			go func() {
+				v.Close()
+			}()
+
 		}
 	}
 	return &emptypb.Empty{}, nil
@@ -97,67 +102,44 @@ func (n *NodeImpl) GetSelf() (peer netip.AddrPort) {
 	return n.self
 }
 
-/*
-func (n *NodeImpl) AddNode(peer netip.AddrPort) {
-
-}
-
-func (n *NodeImpl) RemoveNode(peer netip.AddrPort) {
-	if v, ok := n.peerList[n.HashPeer(peer)]; ok {
-		v.Close()
-
-		delete(n.peerList, n.HashPeer(peer))
-	}
-
-}*/
-
+// Returns the remote HashStoreClient, nil, true if this node is the right node for the data.
 func (n *NodeImpl) GetNode(key string) (proto.HashStoreClient, bool) {
 
 	// Find the node that has the checksum just preceding this data checksum
 	// Else it's the last node
 	crc32 := n.HashString(key)
 
-	var maxKey *proto.HashStoreClient
-	var maxCrc uint32
-
-	var beforeKey *proto.HashStoreClient
-	var beforeDelta uint32 = math.MaxUint32
-	var beforeCrc uint32
-
-	for nodeCrc, client := range n.peerList {
-
-		// find max node on ring
-		if nodeCrc > maxCrc {
-			if client != nil {
-				maxKey = &client.HashStoreClient
-			} else {
-				maxKey = nil
-			}
-			maxCrc = nodeCrc
-		}
-		//
-		if nodeCrc <= crc32 && crc32-nodeCrc < beforeDelta {
-			beforeDelta = crc32 - nodeCrc
-			if client != nil {
-				beforeKey = &client.HashStoreClient
-			} else {
-				beforeKey = nil
-			}
-			beforeCrc = nodeCrc
-		}
-
+	peerList := []uint32{}
+	for k := range n.peerList {
+		peerList = append(peerList, k)
 	}
 
-	if beforeKey != nil {
-		return *beforeKey, false
-	} else if beforeCrc == n.selfHash {
+	hash, self := n.GetNodeForHash(crc32, peerList, n.selfHash)
+
+	if self {
 		return nil, true
+	} else {
+		return n.peerList[hash], false
 	}
+}
 
-	if maxCrc == n.selfHash {
-		return nil, true
+func (n *NodeImpl) Shutdown() {
+
+	self := &proto.Node{Host: n.self.Addr().String(), Port: uint32(n.self.Port())}
+
+	var wg sync.WaitGroup
+	for k, p := range n.peerList {
+		if k != n.selfHash {
+			wg.Add(1)
+			go func() {
+				ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*40)
+				p.NodeStatusClient.RemoveNode(ctx, self)
+				defer cancel()
+				defer wg.Done()
+			}()
+		}
 	}
-	return *maxKey, false
+	wg.Wait()
 }
 
 func createClient(server netip.AddrPort) *client {
