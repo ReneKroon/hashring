@@ -28,9 +28,10 @@ type NodeImpl struct {
 	selfHash uint32
 	self     netip.AddrPort
 	proto.UnimplementedNodeStatusServer
+	rebalancer func(node hashring.Node)
 }
 
-func NewNodeImpl(inital []netip.AddrPort, self netip.AddrPort, h hashring.Hasher) hashring.Node {
+func NewNodeImpl(inital []netip.AddrPort, self netip.AddrPort, h hashring.Hasher, k hashring.ServerKey) hashring.Node {
 	p := map[uint32]*client{}
 	gotList := false
 	var list *proto.NodeList
@@ -52,10 +53,12 @@ func NewNodeImpl(inital []netip.AddrPort, self netip.AddrPort, h hashring.Hasher
 	}
 	p[h.HashPeer(self)] = nil
 
-	nImpl := &NodeImpl{h, p, h.HashPeer(self), self, proto.UnimplementedNodeStatusServer{}}
+	nImpl := &NodeImpl{h, p, h.HashPeer(self), self, proto.UnimplementedNodeStatusServer{}, k.Rebalance}
 	if gotList {
 		for _, node := range list.Node {
-			nImpl.AddNode(context.Background(), node)
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			nImpl.AddNode(ctx, node)
 		}
 	}
 	return nImpl
@@ -68,6 +71,7 @@ func (n *NodeImpl) AddNode(ctx context.Context, node *proto.Node) (*emptypb.Empt
 		n.peerList[n.HashPeer(peer)] = client
 		client.AddNode(ctx, &proto.Node{Host: n.self.Addr().String(), Port: uint32(n.self.Port())})
 	}
+	n.rebalancer(n)
 
 	return &emptypb.Empty{}, nil
 }
@@ -89,12 +93,14 @@ func (n *NodeImpl) RemoveNode(ctx context.Context, node *proto.Node) (*emptypb.E
 		log.Println("Removing a node ", peer.String())
 		if v, ok := n.peerList[n.HashPeer(peer)]; ok {
 			delete(n.peerList, n.HashPeer(peer))
+
 			go func() {
 				v.Close()
 			}()
 
 		}
 	}
+	n.rebalancer(n)
 	return &emptypb.Empty{}, nil
 }
 
@@ -126,7 +132,7 @@ func (n *NodeImpl) GetNode(key string) (proto.HashStoreClient, bool) {
 func (n *NodeImpl) Shutdown() {
 
 	self := &proto.Node{Host: n.self.Addr().String(), Port: uint32(n.self.Port())}
-
+	delete(n.peerList, n.selfHash)
 	var wg sync.WaitGroup
 	for k, p := range n.peerList {
 		if k != n.selfHash {
@@ -140,6 +146,7 @@ func (n *NodeImpl) Shutdown() {
 		}
 	}
 	wg.Wait()
+	n.rebalancer(n)
 }
 
 func createClient(server netip.AddrPort) *client {

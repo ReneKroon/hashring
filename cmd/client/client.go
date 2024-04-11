@@ -30,31 +30,62 @@ func main() {
 	defer conn.Close()
 	client := proto.NewHashStoreClient(conn)
 
-	for i := 0; ; i++ {
-		key := fmt.Sprintf("test%d", i)
-		slowPut(client, key, "data")
+	for {
+		for i := 0; i < 100; i++ {
+			key := fmt.Sprintf("test%d", i)
+			slowPut(client, key, "data")
 
-		if data, err := slowGet(client, key); err == nil {
-			if data.Found {
-				fmt.Println(*data.Data)
+			if data, err := slowGet(client, key); err == nil {
+				if data.Found {
+					fmt.Printf("-> Add %d\t%s\n", i, *data.Data)
+				} else {
+					fmt.Println("Not found")
+				}
 			} else {
-				fmt.Println("Not found")
+
+				fmt.Println("->" + err.Error())
 			}
-		} else {
 
-			fmt.Println(err)
+			time.Sleep(time.Millisecond * 150)
 		}
+		for i := 0; i < 100; i++ {
+			key := fmt.Sprintf("test%d", i)
+			if data, err := slowGet(client, key); err == nil {
+				if data.Found {
+					fmt.Println(*data.Data)
+				} else {
+					fmt.Println("Not found")
+				}
+			} else {
 
-		i++
-		time.Sleep(time.Millisecond * 150)
+				fmt.Println(err)
+			}
+			slowRemove(client, key)
+		}
+	}
+}
+
+func slowRemove(client proto.HashStoreClient, key string) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	dataToRemove := proto.Key{Key: key}
+	if status, err := client.Remove(ctx, &dataToRemove); err != nil {
+		log.Println(err.Error())
+	} else {
+		log.Println(status)
 	}
 }
 
 func slowPut(client proto.HashStoreClient, key string, data string) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	dataToPut := proto.KeyData{Key: key, Data: "data"}
-	client.Put(ctx, &dataToPut)
+	dataToPut := proto.KeyData{Key: key, Data: data}
+	if status, err := client.Put(ctx, &dataToPut); err != nil {
+		log.Println(err.Error())
+	} else {
+		log.Println(status)
+	}
+
 }
 
 func slowGet(client proto.HashStoreClient, key string) (*proto.Data, error) {

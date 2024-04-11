@@ -37,10 +37,11 @@ func main() {
 
 	home := netip.AddrPortFrom(netip.AddrFrom4([4]byte(address.To4())), 7070)
 
+	keys := internal.NewKeyImpl()
 	hasher := internal.NewHasher()
-	node := internal.NewNodeImpl([]netip.AddrPort{home}, ip, hasher)
+	node := internal.NewNodeImpl([]netip.AddrPort{home}, ip, hasher, keys)
 
-	ring := internal.NewRing(node, hasher)
+	ring := internal.NewRing(node, hasher, keys)
 
 	grpcServer := grpc.NewServer(opts...)
 	proto.RegisterHashStoreServer(grpcServer, ring)

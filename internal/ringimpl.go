@@ -15,9 +15,7 @@ type SingleRing struct {
 	proto.UnimplementedHashStoreServer
 }
 
-func NewRing(node hashring.Node, hasher hashring.Hasher) hashring.Ring {
-
-	keys := NewKeyImpl()
+func NewRing(node hashring.Node, hasher hashring.Hasher, keys hashring.ServerKey) hashring.Ring {
 
 	return SingleRing{
 
@@ -38,7 +36,14 @@ func (r SingleRing) Get(ctx context.Context, k *proto.Key) (*proto.Data, error) 
 		log.Println("Retrieving a key ", k.Key, p.Data, p.Found)
 		return p, nil
 	} else {
-		return client.Get(ctx, k)
+		if p, err := client.Get(ctx, k); err == nil {
+			log.Println("Retrieving a key ", k.Key, p.Data, p.Found)
+			return p, err
+		} else {
+			log.Println(err.Error())
+			return p, err
+		}
+
 	}
 
 }
@@ -63,6 +68,7 @@ func (r SingleRing) Put(ctx context.Context, k *proto.KeyData) (*proto.UpdateSta
 	}
 
 }
+
 func (r SingleRing) Remove(ctx context.Context, k *proto.Key) (*proto.UpdateStatus, error) {
 	p := &proto.UpdateStatus{}
 

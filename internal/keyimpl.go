@@ -1,7 +1,12 @@
 package internal
 
 import (
+	"context"
+	"log"
+	"time"
+
 	"github.com/ReneKroon/hashring"
+	"github.com/ReneKroon/hashring/proto"
 )
 
 type ServerKeyImpl struct {
@@ -13,9 +18,9 @@ func NewKeyImpl() hashring.ServerKey {
 	return ServerKeyImpl{make(map[string]string)}
 }
 
-func (k ServerKeyImpl) Get(key string) (*string, bool) {
+func (s ServerKeyImpl) Get(key string) (*string, bool) {
 
-	data, found := k.localData[key]
+	data, found := s.localData[key]
 
 	if found {
 		return &data, found
@@ -23,11 +28,29 @@ func (k ServerKeyImpl) Get(key string) (*string, bool) {
 	return nil, found
 
 }
-func (k ServerKeyImpl) Put(key string, data string) {
+func (s ServerKeyImpl) Put(key string, data string) {
 
-	k.localData[key] = data
+	s.localData[key] = data
 
 }
-func (k ServerKeyImpl) Remove(key string) {
-	delete(k.localData, key)
+func (s ServerKeyImpl) Remove(key string) {
+	delete(s.localData, key)
+}
+
+// after a node is being shutdown, or this node is shutting down it should rebalance the keys over the network
+func (s ServerKeyImpl) Rebalance(node hashring.Node) {
+	log.Println("Rebalance!")
+	for k, v := range s.localData {
+		if client, self := node.GetNode(k); !self {
+			data := &proto.KeyData{Key: k, Data: v}
+			delete(s.localData, k)
+			go func() {
+				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+				defer cancel()
+				client.Put(ctx, data)
+			}()
+		}
+
+	}
+
 }
