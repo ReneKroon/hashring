@@ -8,7 +8,7 @@ import (
 )
 
 func TestNewRing(t *testing.T) {
-	keys := internal.NewKeyImpl()
+	keys := internal.NewServerKeyImpl()
 	hasher := internal.NewHasher()
 	node := internal.NewNodeImpl([]netip.AddrPort{}, netip.MustParseAddrPort("192.168.0.1:7070"), hasher, keys, internal.CreateClient)
 

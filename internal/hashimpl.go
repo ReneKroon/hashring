@@ -34,14 +34,13 @@ func (h HashCrc32) GetNodeForHash(crc32 uint32, peerList []uint32, self uint32) 
 
 	// Find the node that has the checksum just preceding this data checksum
 	// Else it's the last node
-
 	var maxCrc uint32
 
 	var beforeDelta uint32 = math.MaxUint32
 	var beforeCrc uint32
 
-	var beforeCrcSet bool
-	var maxCrcSet bool
+	var beforeCrcSet = false
+	var maxCrcSet = false
 
 	for _, nodeCrc := range peerList {
 

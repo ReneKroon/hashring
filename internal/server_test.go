@@ -2,10 +2,12 @@ package internal_test
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net"
 	"net/netip"
 	"testing"
+	"time"
 
 	"github.com/ReneKroon/hashring/internal"
 	"github.com/ReneKroon/hashring/proto"
@@ -16,7 +18,19 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
-var buffers map[netip.AddrPort]*bufconn.Listener
+var buffers = map[netip.AddrPort]*bufconn.Listener{}
+var keyStores = map[*internal.Server]*internal.ServerKeyImpl{}
+
+var masterNode = netip.AddrPortFrom(netip.MustParseAddr("192.168.0.1"), nextPort)
+
+var nextPort uint16 = 7070
+
+func newHost() netip.AddrPort {
+	next := netip.AddrPortFrom(netip.MustParseAddr("192.168.0.1"), nextPort)
+	// better CRC spread, the crc32 diff between 7070 and 7071 is unfavourable
+	nextPort += 10
+	return next
+}
 
 func CreateTestClient(server netip.AddrPort) *internal.Client {
 	var opts []grpc.DialOption
@@ -37,9 +51,6 @@ func CreateTestClient(server netip.AddrPort) *internal.Client {
 }
 
 func addNodeBuffer(addrPort netip.AddrPort) *bufconn.Listener {
-	if buffers == nil {
-		buffers = map[netip.AddrPort]*bufconn.Listener{}
-	}
 
 	buffer := 1024 * 1024
 	lis := bufconn.Listen(buffer)
@@ -48,38 +59,43 @@ func addNodeBuffer(addrPort netip.AddrPort) *bufconn.Listener {
 	return lis
 }
 
-func TestIntegration(t *testing.T) {
+func cleanNodeBuffers() {
+	for _, v := range buffers {
+		v.Close()
+	}
+}
 
-	address := internal.GetLocalIP()
-
-	home := netip.AddrPortFrom(netip.AddrFrom4([4]byte(address.To4())), 7070)
+func AddServer(t *testing.T, home netip.AddrPort) *internal.Server {
 
 	lis := addNodeBuffer(home)
 
-	keys := internal.NewKeyImpl()
+	keys := internal.NewServerKeyImpl()
 	hasher := internal.NewHasher()
 
-	node := internal.NewNodeImpl([]netip.AddrPort{home}, home, hasher, keys, CreateTestClient)
+	node := internal.NewNodeImpl([]netip.AddrPort{masterNode}, home, hasher, keys, CreateTestClient)
 
 	ring := internal.NewRing(node, hasher, keys)
 
 	server := internal.NewServer(ring, node, lis)
 
+	keyStores[server] = keys.(*internal.ServerKeyImpl)
+
 	go func() { server.Run() }()
+
+	return server
+}
+
+func TestIntegration(t *testing.T) {
+
+	home := newHost()
+	server := AddServer(t, home)
+	defer server.Stop()
+	defer cleanNodeBuffers()
 
 	conn := CreateTestClient(home)
 
 	client := proto.NewHashStoreClient(conn)
 	nodeClient := proto.NewNodeStatusClient(conn)
-
-	/*
-		closer := func() {
-			err := lis.Close()
-			if err != nil {
-				log.Printf("error closing listener: %v", err)
-			}
-			server.Stop()
-		}*/
 
 	list, _ := nodeClient.GetNodeList(context.Background(), &emptypb.Empty{})
 
@@ -91,7 +107,26 @@ func TestIntegration(t *testing.T) {
 	assert.Equal(t, true, data.Found, "Message should have been found")
 	assert.Equal(t, "data", *data.Data, "Message Data should have been found")
 
-	//return client, closer
-	server.Stop()
-	lis.Close()
+	for i := 0; i < 100; i++ {
+		client.Put(context.Background(), &proto.KeyData{Key: fmt.Sprintf("key%d", i*101), Data: "data"})
+
+	}
+
+	server2 := AddServer(t, newHost())
+	defer server2.Stop()
+
+	<-time.After(2 * time.Second)
+	// check both stores have keys (rebalance)
+	assert.True(t, len(keyStores[server].LocalData) > 30, fmt.Sprintf("Length was only %d", mapCount(keyStores[server].LocalData)))
+	assert.True(t, len(keyStores[server2].LocalData) > 30, fmt.Sprintf("Length was only %d", mapCount(keyStores[server2].LocalData)))
+	// cleanup
+
+}
+
+func mapCount[K comparable, V any](m map[K]V) int {
+	count := 0
+	for range m {
+		count++
+	}
+	return count
 }

@@ -31,7 +31,7 @@ func main() {
 
 	home := netip.AddrPortFrom(netip.AddrFrom4([4]byte(address.To4())), 7070)
 
-	keys := internal.NewKeyImpl()
+	keys := internal.NewServerKeyImpl()
 	hasher := internal.NewHasher()
 	node := internal.NewNodeImpl([]netip.AddrPort{home}, ip, hasher, keys, internal.CreateClient)
 

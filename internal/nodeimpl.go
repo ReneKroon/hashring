@@ -28,7 +28,7 @@ type NodeImpl struct {
 	selfHash uint32
 	self     netip.AddrPort
 	proto.UnimplementedNodeStatusServer
-	rebalancer   func(node hashring.Node)
+	rebalancer   func(hashring.Node) (int, int)
 	createclient func(server netip.AddrPort) *Client
 }
 
@@ -40,17 +40,22 @@ func NewNodeImpl(inital []netip.AddrPort, self netip.AddrPort, h hashring.Hasher
 		if h.HashPeer(r) == h.HashPeer(self) {
 			continue
 		}
-		client := createclient(r)
-		p[h.HashPeer(r)] = client
-		if !gotList {
-			var err error
-			if list, err = client.NodeStatusClient.GetNodeList(context.Background(), &emptypb.Empty{}); err == nil {
-				gotList = true
-				// process list
-			} else {
-				panic(err)
+		if createclient != nil {
+			client := createclient(r)
+			p[h.HashPeer(r)] = client
+			if !gotList {
+				var err error
+				if list, err = client.NodeStatusClient.GetNodeList(context.Background(), &emptypb.Empty{}); err == nil {
+					gotList = true
+					// process list
+				} else {
+					panic(err)
+				}
 			}
+		} else {
+			p[h.HashPeer(r)] = nil
 		}
+
 	}
 	p[h.HashPeer(self)] = nil
 

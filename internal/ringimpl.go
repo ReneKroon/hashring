@@ -31,8 +31,11 @@ func (r SingleRing) Get(ctx context.Context, k *proto.Key) (*proto.Data, error) 
 	p := &proto.Data{}
 
 	if client, self := r.GetNode(k.Key); self {
-
-		p.Data, p.Found = r.k.Get(k.Key)
+		var d string
+		d, p.Found = r.k.Get(k.Key)
+		if p.Found {
+			p.Data = &d
+		}
 		log.Println("Retrieving a key ", k.Key, p.Data, p.Found)
 		return p, nil
 	} else {
