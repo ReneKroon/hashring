@@ -5,9 +5,9 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"net"
 	"time"
 
+	"github.com/ReneKroon/hashring/internal"
 	"github.com/ReneKroon/hashring/proto"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -20,7 +20,7 @@ func main() {
 	flag.Parse()
 	var opts []grpc.DialOption
 
-	var server = fmt.Sprintf("%s:%d", GetLocalIP(), *port)
+	var server = fmt.Sprintf("%s:%d", internal.GetLocalIP(), *port)
 	opts = append(opts, grpc.WithTransportCredentials(insecure.NewCredentials()))
 
 	conn, err := grpc.NewClient(server, opts...)
@@ -92,21 +92,4 @@ func slowGet(client proto.HashStoreClient, key string) (*proto.Data, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	return client.Get(ctx, &proto.Key{Key: key})
-}
-
-// GetLocalIP returns the non loopback local IP of the host
-func GetLocalIP() string {
-	addrs, err := net.InterfaceAddrs()
-	if err != nil {
-		return ""
-	}
-	for _, address := range addrs {
-		// check the address type and if it is not a loopback the display it
-		if ipnet, ok := address.(*net.IPNet); ok && !ipnet.IP.IsLoopback() && !ipnet.IP.IsUnspecified() && !ipnet.IP.IsLinkLocalUnicast() {
-			if ipnet.IP.To4() != nil {
-				return ipnet.IP.String()
-			}
-		}
-	}
-	return ""
 }

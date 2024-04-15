@@ -15,7 +15,7 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
-type client struct {
+type Client struct {
 	*grpc.ClientConn
 	proto.HashStoreClient
 	proto.NodeStatusClient
@@ -24,22 +24,23 @@ type client struct {
 
 type NodeImpl struct {
 	hashring.Hasher
-	peerList map[uint32]*client
+	peerList map[uint32]*Client
 	selfHash uint32
 	self     netip.AddrPort
 	proto.UnimplementedNodeStatusServer
-	rebalancer func(node hashring.Node)
+	rebalancer   func(node hashring.Node)
+	createclient func(server netip.AddrPort) *Client
 }
 
-func NewNodeImpl(inital []netip.AddrPort, self netip.AddrPort, h hashring.Hasher, k hashring.ServerKey) hashring.Node {
-	p := map[uint32]*client{}
+func NewNodeImpl(inital []netip.AddrPort, self netip.AddrPort, h hashring.Hasher, k hashring.ServerKey, createclient func(server netip.AddrPort) *Client) hashring.Node {
+	p := map[uint32]*Client{}
 	gotList := false
 	var list *proto.NodeList
 	for _, r := range inital {
 		if h.HashPeer(r) == h.HashPeer(self) {
 			continue
 		}
-		client := createClient(r)
+		client := createclient(r)
 		p[h.HashPeer(r)] = client
 		if !gotList {
 			var err error
@@ -53,7 +54,7 @@ func NewNodeImpl(inital []netip.AddrPort, self netip.AddrPort, h hashring.Hasher
 	}
 	p[h.HashPeer(self)] = nil
 
-	nImpl := &NodeImpl{h, p, h.HashPeer(self), self, proto.UnimplementedNodeStatusServer{}, k.Rebalance}
+	nImpl := &NodeImpl{h, p, h.HashPeer(self), self, proto.UnimplementedNodeStatusServer{}, k.Rebalance, createclient}
 	if gotList {
 		for _, node := range list.Node {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -67,7 +68,7 @@ func NewNodeImpl(inital []netip.AddrPort, self netip.AddrPort, h hashring.Hasher
 func (n *NodeImpl) AddNode(ctx context.Context, node *proto.Node) (*emptypb.Empty, error) {
 	log.Println("Add a node ", node.Host, node.Port)
 	if peer, err := netip.ParseAddrPort(fmt.Sprintf("%s:%d", node.Host, node.Port)); err == nil {
-		client := createClient(peer)
+		client := n.createclient(peer)
 		n.peerList[n.HashPeer(peer)] = client
 		client.AddNode(ctx, &proto.Node{Host: n.self.Addr().String(), Port: uint32(n.self.Port())})
 	}
@@ -149,7 +150,7 @@ func (n *NodeImpl) Shutdown() {
 	n.rebalancer(n)
 }
 
-func createClient(server netip.AddrPort) *client {
+func CreateClient(server netip.AddrPort) *Client {
 	var opts []grpc.DialOption
 
 	opts = append(opts, grpc.WithTransportCredentials(insecure.NewCredentials()))
@@ -159,6 +160,6 @@ func createClient(server netip.AddrPort) *client {
 		log.Fatalf("fail to dial: %v", err)
 	}
 	//defer conn.Close()
-	return &client{conn, proto.NewHashStoreClient(conn), proto.NewNodeStatusClient(conn), server}
+	return &Client{conn, proto.NewHashStoreClient(conn), proto.NewNodeStatusClient(conn), server}
 
 }
