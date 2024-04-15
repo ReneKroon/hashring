@@ -106,7 +106,8 @@ func (n *NodeImpl) RemoveNode(ctx context.Context, node *proto.Node) (*emptypb.E
 
 		}
 	}
-	n.rebalancer(n)
+
+	n.tryRebalance()
 	return &emptypb.Empty{}, nil
 }
 
@@ -152,7 +153,20 @@ func (n *NodeImpl) Shutdown() {
 		}
 	}
 	wg.Wait()
-	n.rebalancer(n)
+	n.tryRebalance()
+}
+
+func (n *NodeImpl) tryRebalance() {
+	nodesRemaining := false
+	for range n.peerList {
+		nodesRemaining = true
+		break
+	}
+	if nodesRemaining {
+		n.rebalancer(n)
+	} else {
+		log.Println("Last node in the network is gone!")
+	}
 }
 
 func CreateClient(server netip.AddrPort) *Client {

@@ -37,7 +37,7 @@ func main() {
 
 			if data, err := slowGet(client, key); err == nil {
 				if data.Found {
-					fmt.Printf("-> Add %d\t%s\n", i, *data.Data)
+
 				} else {
 					fmt.Println("Not found")
 				}
@@ -52,7 +52,7 @@ func main() {
 			key := fmt.Sprintf("test%d", i)
 			if data, err := slowGet(client, key); err == nil {
 				if data.Found {
-					fmt.Println(*data.Data)
+
 				} else {
 					fmt.Println("Not found")
 				}
@@ -69,10 +69,10 @@ func slowRemove(client proto.HashStoreClient, key string) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	dataToRemove := proto.Key{Key: key}
-	if status, err := client.Remove(ctx, &dataToRemove); err != nil {
+	if _, err := client.Remove(ctx, &dataToRemove); err != nil {
 		log.Println(err.Error())
 	} else {
-		log.Println(status)
+
 	}
 }
 
@@ -80,10 +80,10 @@ func slowPut(client proto.HashStoreClient, key string, data string) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	dataToPut := proto.KeyData{Key: key, Data: data}
-	if status, err := client.Put(ctx, &dataToPut); err != nil {
+	if _, err := client.Put(ctx, &dataToPut); err != nil {
 		log.Println(err.Error())
 	} else {
-		log.Println(status)
+
 	}
 
 }

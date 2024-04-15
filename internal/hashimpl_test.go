@@ -12,7 +12,7 @@ import (
 func TestMe(t *testing.T) {
 
 	s := "Crcme"
-	h := internal.NewHasher()
+	h := internal.HashCrc32{}
 
 	h.HashString(s)
 	h.HashPeer(netip.MustParseAddrPort("192.168.0.1:7070"))
@@ -21,7 +21,7 @@ func TestMe(t *testing.T) {
 
 func TestGetNodeForHash(t *testing.T) {
 
-	h := internal.NewHasher()
+	h := internal.HashCrc32{}
 
 	self := h.HashPeer(netip.MustParseAddrPort("192.168.0.1:7070"))
 	node2 := h.HashPeer(netip.MustParseAddrPort("192.168.0.1:7071"))
@@ -51,7 +51,7 @@ func TestGetNodeForHash(t *testing.T) {
 
 // Testdata shows taht indeed the nodes hash unfavourably to 3050004111 && 3268177433, meaning that these 100 test keys map to 1 node.
 func TestGetNodeForHash_rebalance(t *testing.T) {
-	h := internal.NewHasher()
+	h := internal.HashCrc32{}
 
 	self := h.HashPeer(netip.MustParseAddrPort("192.168.0.1:7070"))
 	node3 := h.HashPeer(netip.MustParseAddrPort("192.168.0.1:7071"))
@@ -79,7 +79,7 @@ func TestGetNodeForHash_rebalance(t *testing.T) {
 
 func TestGetNodeForHash_order(t *testing.T) {
 
-	h := internal.NewHasher()
+	h := internal.HashCrc32{}
 
 	self := h.HashPeer(netip.MustParseAddrPort("192.168.0.1:7070"))
 	node3 := h.HashPeer(netip.MustParseAddrPort("192.168.0.1:7072"))
@@ -96,7 +96,7 @@ func TestGetNodeForHash_order(t *testing.T) {
 
 func TestGetNodeForHash_order_reverse(t *testing.T) {
 
-	h := internal.NewHasher()
+	h := internal.HashCrc32{}
 
 	self := h.HashPeer(netip.MustParseAddrPort("192.168.0.1:7070"))
 	node3 := h.HashPeer(netip.MustParseAddrPort("192.168.0.1:7072"))
