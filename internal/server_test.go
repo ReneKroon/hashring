@@ -110,7 +110,6 @@ func TestIntegration(t *testing.T) {
 	}
 
 	server2 := AddServer(t, newHost())
-	defer server2.Stop()
 
 	<-time.After(time.Second)
 	// check both stores have keys (rebalance)
@@ -118,6 +117,11 @@ func TestIntegration(t *testing.T) {
 	assert.True(t, len(keyStores[server2].LocalData) > 30, fmt.Sprintf("Length was only %d", mapCount(keyStores[server2].LocalData)))
 	// cleanup
 
+	// the stop will check that no locks occur during rebalancing etc.
+	server2.Stop()
+	<-time.After(time.Second)
+	// check succesful transfer back to remaining server
+	assert.True(t, len(keyStores[server].LocalData) == 101, fmt.Sprintf("Length was only %d", mapCount(keyStores[server].LocalData)))
 }
 
 func mapCount[K comparable, V any](m map[K]V) int {

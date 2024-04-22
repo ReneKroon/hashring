@@ -50,8 +50,10 @@ func (s *ServerKeyImpl) Rebalance(node hashring.Node) (kept, sent int) {
 	for k, v := range s.LocalData {
 		if client, self := node.GetNode(k); !self {
 			sent++
+			s.mutex.Lock()
 			data := &proto.KeyData{Key: k, Data: v}
 			delete(s.LocalData, k)
+			s.mutex.Unlock()
 			go func() {
 				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 				defer cancel()

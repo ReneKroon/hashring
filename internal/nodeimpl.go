@@ -101,7 +101,7 @@ func (n *NodeImpl) GetNodeList(context.Context, *emptypb.Empty) (*proto.NodeList
 
 func (n *NodeImpl) RemoveNode(ctx context.Context, node *proto.Node) (*emptypb.Empty, error) {
 	n.nodeLock.Lock()
-	defer n.nodeLock.Unlock()
+
 	if peer, err := netip.ParseAddrPort(fmt.Sprintf("%s:%d", node.Host, node.Port)); err == nil {
 		log.Println("Removing a node ", peer.String())
 		if v, ok := n.peerList[n.HashPeer(peer)]; ok {
@@ -113,7 +113,7 @@ func (n *NodeImpl) RemoveNode(ctx context.Context, node *proto.Node) (*emptypb.E
 
 		}
 	}
-
+	n.nodeLock.Unlock()
 	n.tryRebalance()
 	return &emptypb.Empty{}, nil
 }
@@ -147,7 +147,7 @@ func (n *NodeImpl) GetNode(key string) (proto.HashStoreClient, bool) {
 
 func (n *NodeImpl) Shutdown() {
 	n.nodeLock.Lock()
-	defer n.nodeLock.Unlock()
+
 	self := &proto.Node{Host: n.self.Addr().String(), Port: uint32(n.self.Port())}
 	delete(n.peerList, n.selfHash)
 	var wg sync.WaitGroup
@@ -163,16 +163,20 @@ func (n *NodeImpl) Shutdown() {
 			}()
 		}
 	}
+	n.nodeLock.Unlock()
 	wg.Wait()
+
 	n.tryRebalance()
 }
 
 func (n *NodeImpl) tryRebalance() {
+	n.nodeLock.RLock()
 	nodesRemaining := false
 	for range n.peerList {
 		nodesRemaining = true
 		break
 	}
+	n.nodeLock.RUnlock()
 	if nodesRemaining {
 		n.rebalancer(n)
 	} else {

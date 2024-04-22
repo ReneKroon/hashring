@@ -55,10 +55,8 @@ func (s *Server) Run() error {
 
 		sig := <-sigs
 		fmt.Println("Caught signal")
-		fmt.Println()
 		fmt.Println(sig)
-		s.node.Shutdown()
-		s.Server.GracefulStop()
+		s.shutdown()
 
 	}()
 	return s.Server.Serve(s.lis)
@@ -66,5 +64,11 @@ func (s *Server) Run() error {
 }
 
 func (s *Server) Stop() {
+	s.shutdown()
+}
+
+func (s *Server) shutdown() {
+	fmt.Println("shutting down")
+	s.node.Shutdown()
 	s.Server.GracefulStop()
 }
