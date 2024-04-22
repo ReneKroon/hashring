@@ -30,6 +30,7 @@ type NodeImpl struct {
 	proto.UnimplementedNodeStatusServer
 	rebalancer   func(hashring.Node) (int, int)
 	createclient func(server netip.AddrPort) *Client
+	nodeLock     sync.RWMutex
 }
 
 func NewNodeImpl(inital []netip.AddrPort, self netip.AddrPort, h hashring.Hasher, k hashring.ServerKey, createclient func(server netip.AddrPort) *Client) hashring.Node {
@@ -59,7 +60,7 @@ func NewNodeImpl(inital []netip.AddrPort, self netip.AddrPort, h hashring.Hasher
 	}
 	p[h.HashPeer(self)] = nil
 
-	nImpl := &NodeImpl{h, p, h.HashPeer(self), self, proto.UnimplementedNodeStatusServer{}, k.Rebalance, createclient}
+	nImpl := &NodeImpl{h, p, h.HashPeer(self), self, proto.UnimplementedNodeStatusServer{}, k.Rebalance, createclient, sync.RWMutex{}}
 	if gotList {
 		for _, node := range list.Node {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -71,17 +72,22 @@ func NewNodeImpl(inital []netip.AddrPort, self netip.AddrPort, h hashring.Hasher
 }
 
 func (n *NodeImpl) AddNode(ctx context.Context, node *proto.Node) (*emptypb.Empty, error) {
+	n.nodeLock.Lock()
+	defer n.nodeLock.Unlock()
 	log.Println("Add a node ", node.Host, node.Port)
 	if peer, err := netip.ParseAddrPort(fmt.Sprintf("%s:%d", node.Host, node.Port)); err == nil {
 		client := n.createclient(peer)
 		n.peerList[n.HashPeer(peer)] = client
 		client.AddNode(ctx, &proto.Node{Host: n.self.Addr().String(), Port: uint32(n.self.Port())})
 	}
-	n.rebalancer(n)
+
+	go func() { n.tryRebalance() }()
 
 	return &emptypb.Empty{}, nil
 }
 func (n *NodeImpl) GetNodeList(context.Context, *emptypb.Empty) (*proto.NodeList, error) {
+	n.nodeLock.RLock()
+	defer n.nodeLock.RUnlock()
 	list := &proto.NodeList{}
 	for _, v := range n.peerList {
 		if v == nil {
@@ -94,7 +100,8 @@ func (n *NodeImpl) GetNodeList(context.Context, *emptypb.Empty) (*proto.NodeList
 }
 
 func (n *NodeImpl) RemoveNode(ctx context.Context, node *proto.Node) (*emptypb.Empty, error) {
-
+	n.nodeLock.Lock()
+	defer n.nodeLock.Unlock()
 	if peer, err := netip.ParseAddrPort(fmt.Sprintf("%s:%d", node.Host, node.Port)); err == nil {
 		log.Println("Removing a node ", peer.String())
 		if v, ok := n.peerList[n.HashPeer(peer)]; ok {
@@ -123,6 +130,8 @@ func (n *NodeImpl) GetNode(key string) (proto.HashStoreClient, bool) {
 	crc32 := n.HashString(key)
 
 	peerList := []uint32{}
+	n.nodeLock.RLock()
+	defer n.nodeLock.RUnlock()
 	for k := range n.peerList {
 		peerList = append(peerList, k)
 	}
@@ -137,16 +146,18 @@ func (n *NodeImpl) GetNode(key string) (proto.HashStoreClient, bool) {
 }
 
 func (n *NodeImpl) Shutdown() {
-
+	n.nodeLock.Lock()
+	defer n.nodeLock.Unlock()
 	self := &proto.Node{Host: n.self.Addr().String(), Port: uint32(n.self.Port())}
 	delete(n.peerList, n.selfHash)
 	var wg sync.WaitGroup
 	for k, p := range n.peerList {
 		if k != n.selfHash {
 			wg.Add(1)
+			myPeer := p
 			go func() {
 				ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*40)
-				p.NodeStatusClient.RemoveNode(ctx, self)
+				myPeer.NodeStatusClient.RemoveNode(ctx, self)
 				defer cancel()
 				defer wg.Done()
 			}()

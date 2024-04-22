@@ -33,9 +33,6 @@ func newHost() netip.AddrPort {
 }
 
 func CreateTestClient(server netip.AddrPort) *internal.Client {
-	var opts []grpc.DialOption
-
-	opts = append(opts, grpc.WithTransportCredentials(insecure.NewCredentials()))
 
 	conn, err := grpc.DialContext(context.Background(), "",
 		grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) {
