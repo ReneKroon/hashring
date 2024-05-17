@@ -1,4 +1,4 @@
-# A toy project to run a consistent hash-ring with multiple nodes
+# A project to run a consistent hash-ring with multiple nodes
 
 ## generate protobuf code:
 ```
