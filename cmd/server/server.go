@@ -23,7 +23,7 @@ func main() {
 
 	ip := netip.AddrPortFrom(netip.AddrFrom4([4]byte(address.To4())), uint16(*port))
 
-	lis, err := net.Listen("tcp", fmt.Sprintf(ip.String()))
+	lis, err := net.Listen("tcp", fmt.Sprintf("%s", ip.String()))
 	if err != nil {
 		log.Fatalf("failed to listen: %v", err)
 	}
