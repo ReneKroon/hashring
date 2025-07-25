@@ -1,9 +1,9 @@
 #!/bin/bash
 
 # Start port number
-port=7070
+port=7071
 
-# Start 40 processes
+# Start processes
 for i in {1..8}
 do
     go run cmd/server/server.go -port $port &

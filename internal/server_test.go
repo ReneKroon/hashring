@@ -16,7 +16,6 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/test/bufconn"
-	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 var buffers = map[netip.AddrPort]*bufconn.Listener{}
@@ -96,7 +95,7 @@ func TestIntegration(t *testing.T) {
 	client := proto.NewHashStoreClient(conn)
 	nodeClient := proto.NewNodeStatusClient(conn)
 
-	list, _ := nodeClient.GetNodeList(context.Background(), &emptypb.Empty{})
+	list, _ := nodeClient.GetNodeList(context.Background(), &proto.NodeList{})
 
 	assert.Equal(t, list.Node[0].Port, uint32(7070), "We registered on port 7070")
 

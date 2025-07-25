@@ -42,6 +42,6 @@ service HashStore {
 
 service NodeStatus {
      rpc AddNode( Node ) returns ( google.protobuf.Empty ) {}
-     rpc GetNodeList( google.protobuf.Empty ) returns (NodeList) {}
+     rpc GetNodeList(  NodeList ) returns (NodeList) {}
      rpc RemoveNode(Node ) returns ( google.protobuf.Empty) {}
 }

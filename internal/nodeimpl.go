@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"math/rand/v2"
 	"net/netip"
 	"sync"
 	"time"
@@ -33,6 +34,7 @@ type NodeImpl struct {
 	createclient func(server netip.AddrPort) *Client
 	nodeLock     sync.RWMutex
 	nodeUpdate   chan *proto.Node
+	done         chan struct{}
 }
 
 func NewNodeImpl(inital []netip.AddrPort, self netip.AddrPort, h hashring.Hasher, k hashring.ServerKey, createclient func(server netip.AddrPort) *Client) hashring.Node {
@@ -48,12 +50,16 @@ func NewNodeImpl(inital []netip.AddrPort, self netip.AddrPort, h hashring.Hasher
 			p[h.HashPeer(r)] = client
 			if !gotList {
 				var err error
-				client.AddNode(context.Background(), &proto.Node{Host: self.Addr().String(), Port: uint32(self.Port())})
-				if list, err = client.NodeStatusClient.GetNodeList(context.Background(), &emptypb.Empty{}); err == nil {
+				myNode := &proto.Node{Host: self.Addr().String(), Port: uint32(self.Port())}
+
+				if list, err = client.NodeStatusClient.GetNodeList(context.Background(), &proto.NodeList{Node: []*proto.Node{myNode}}); err == nil {
 					gotList = true
 					// process list
 				} else {
 					log.Printf("error getting node list from %s: %v", r, err)
+					p[h.HashPeer(r)].Close()
+					delete(p, h.HashPeer(r))
+
 				}
 			}
 		} else {
@@ -63,16 +69,27 @@ func NewNodeImpl(inital []netip.AddrPort, self netip.AddrPort, h hashring.Hasher
 	}
 	p[h.HashPeer(self)] = nil
 
-	nImpl := &NodeImpl{h, p, h.HashPeer(self), self, proto.UnimplementedNodeStatusServer{}, k.Rebalance, createclient, sync.RWMutex{}, make(chan *proto.Node, 100)}
+	nImpl := &NodeImpl{
+		Hasher:                        h,
+		peerList:                      p,
+		selfHash:                      h.HashPeer(self),
+		self:                          self,
+		UnimplementedNodeStatusServer: proto.UnimplementedNodeStatusServer{},
+		rebalancer:                    k.Rebalance,
+		createclient:                  createclient,
+		nodeLock:                      sync.RWMutex{},
+		nodeUpdate:                    make(chan *proto.Node, 100),
+		done:                          make(chan struct{}),
+	}
 	if gotList {
 		for _, node := range list.Node {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 			defer cancel()
 			nImpl.AddNode(ctx, node)
-
 		}
 	}
 	go nImpl.processUpdates()
+	go nImpl.findNeighbours(nImpl.done)
 	return nImpl
 }
 
@@ -105,10 +122,10 @@ func (n *NodeImpl) processUpdates() {
 
 		for _, node := range newNodes {
 
-			log.Println("Add a node ", node.Host, node.Port)
 			if peer, err := netip.ParseAddrPort(fmt.Sprintf("%s:%d", node.Host, node.Port)); err == nil && peer != n.self {
 				_, found := n.peerList[n.HashPeer(peer)]
 				if !found {
+					log.Println("Add a node ", node.Host, node.Port)
 					client := n.createclient(peer)
 
 					n.peerList[n.HashPeer(peer)] = client
@@ -132,9 +149,12 @@ func (n *NodeImpl) AddNode(ctx context.Context, node *proto.Node) (*emptypb.Empt
 
 	return &emptypb.Empty{}, nil
 }
-func (n *NodeImpl) GetNodeList(context.Context, *emptypb.Empty) (*proto.NodeList, error) {
+func (n *NodeImpl) GetNodeList(ctx context.Context, newNodes *proto.NodeList) (*proto.NodeList, error) {
 	n.nodeLock.RLock()
 	defer n.nodeLock.RUnlock()
+	for _, v := range newNodes.Node {
+		n.nodeUpdate <- v
+	}
 	list := &proto.NodeList{}
 	for _, v := range n.peerList {
 		if v == nil {
@@ -196,7 +216,35 @@ func (n *NodeImpl) GetNode(key string) (proto.HashStoreClient, bool) {
 	}
 }
 
+func (n *NodeImpl) findNeighbours(done chan struct{}) {
+	for {
+		delay := 10 + rand.IntN(10)
+		timer := time.NewTimer(time.Second * time.Duration(delay))
+		select {
+		case <-done:
+			timer.Stop()
+			return
+		case <-timer.C:
+			nodes := []*proto.Node{}
+			for k, p := range n.peerList {
+				if k != n.selfHash {
+					ctx, cancel := context.WithTimeout(context.Background(), time.Second*1)
+					myNode := &proto.Node{Host: n.self.Addr().String(), Port: uint32(n.self.Port())}
+					if list, err := p.GetNodeList(ctx, &proto.NodeList{Node: []*proto.Node{myNode}}); err == nil {
+						nodes = append(nodes, list.Node...)
+					}
+					cancel()
+				}
+			}
+			for _, v := range nodes {
+				n.nodeUpdate <- v
+			}
+		}
+	}
+}
+
 func (n *NodeImpl) Shutdown() {
+	close(n.done) // Signal findNeighbours to stop
 
 	n.nodeUpdate <- &proto.Node{Host: n.self.Addr().String(), Port: math.MaxUint32} // signal shutdown
 	n.nodeLock.Lock()
