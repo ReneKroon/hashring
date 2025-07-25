@@ -8,6 +8,7 @@ import (
 	"math/rand/v2"
 	"net/netip"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ReneKroon/hashring"
@@ -35,6 +36,7 @@ type NodeImpl struct {
 	nodeLock     sync.RWMutex
 	nodeUpdate   chan *proto.Node
 	done         chan struct{}
+	isShutdown   atomic.Bool
 }
 
 func NewNodeImpl(inital []netip.AddrPort, self netip.AddrPort, h hashring.Hasher, k hashring.ServerKey, createclient func(server netip.AddrPort) *Client) hashring.Node {
@@ -80,6 +82,7 @@ func NewNodeImpl(inital []netip.AddrPort, self netip.AddrPort, h hashring.Hasher
 		nodeLock:                      sync.RWMutex{},
 		nodeUpdate:                    make(chan *proto.Node, 100),
 		done:                          make(chan struct{}),
+		isShutdown:                    atomic.Bool{},
 	}
 	if gotList {
 		for _, node := range list.Node {
@@ -90,6 +93,7 @@ func NewNodeImpl(inital []netip.AddrPort, self netip.AddrPort, h hashring.Hasher
 	}
 	go nImpl.processUpdates()
 	go nImpl.findNeighbours(nImpl.done)
+
 	return nImpl
 }
 
@@ -244,6 +248,12 @@ func (n *NodeImpl) findNeighbours(done chan struct{}) {
 }
 
 func (n *NodeImpl) Shutdown() {
+	alreadyShutdown := n.isShutdown.Swap(true)
+	if alreadyShutdown {
+		log.Println("Node is already shutting down")
+		return
+	}
+
 	close(n.done) // Signal findNeighbours to stop
 
 	n.nodeUpdate <- &proto.Node{Host: n.self.Addr().String(), Port: math.MaxUint32} // signal shutdown

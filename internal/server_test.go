@@ -143,9 +143,9 @@ func TestRebalanceIntegration(t *testing.T) {
 	defer server.Stop()
 
 	server2 := AddServer(t, newHost(), home)
-	defer server2.Stop()
 
 	server3 := AddServer(t, newHost(), home)
+	defer server3.Stop()
 
 	conn := CreateTestClient(home)
 	client := proto.NewHashStoreClient(conn)
