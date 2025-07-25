@@ -6,6 +6,7 @@ import (
 	"log"
 	"net"
 	"net/netip"
+	"sync"
 	"testing"
 	"time"
 
@@ -104,10 +105,16 @@ func TestIntegration(t *testing.T) {
 	assert.Equal(t, true, data.Found, "Message should have been found")
 	assert.Equal(t, "data", *data.Data, "Message Data should have been found")
 
+	wg := sync.WaitGroup{}
 	for i := 0; i < 100; i++ {
-		client.Put(context.Background(), &proto.KeyData{Key: fmt.Sprintf("key%d", i*101), Data: "data"})
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			client.Put(context.Background(), &proto.KeyData{Key: fmt.Sprintf("key%d", i), Data: fmt.Sprintf("data%d", i)})
+		}(i)
 
 	}
+	wg.Wait()
 
 	server2 := AddServer(t, newHost())
 
