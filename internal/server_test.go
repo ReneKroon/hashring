@@ -22,7 +22,7 @@ import (
 var buffers = map[netip.AddrPort]*bufconn.Listener{}
 var keyStores = map[*internal.Server]*internal.ServerKeyImpl{}
 
-var masterNode = netip.AddrPortFrom(netip.MustParseAddr("192.168.0.1"), nextPort)
+//var masterNode = netip.AddrPortFrom(netip.MustParseAddr("192.168.0.1"), nextPort)
 
 var nextPort uint16 = 7070
 
@@ -63,7 +63,7 @@ func cleanNodeBuffers() {
 	}
 }
 
-func AddServer(t *testing.T, home netip.AddrPort) *internal.Server {
+func AddServer(t *testing.T, home netip.AddrPort, masterNode netip.AddrPort) *internal.Server {
 
 	lis := addNodeBuffer(home)
 
@@ -86,7 +86,8 @@ func AddServer(t *testing.T, home netip.AddrPort) *internal.Server {
 func TestIntegration(t *testing.T) {
 
 	home := newHost()
-	server := AddServer(t, home)
+
+	server := AddServer(t, home, home)
 	defer server.Stop()
 	defer cleanNodeBuffers()
 
@@ -116,7 +117,7 @@ func TestIntegration(t *testing.T) {
 	}
 	wg.Wait()
 
-	server2 := AddServer(t, newHost())
+	server2 := AddServer(t, newHost(), home)
 
 	<-time.After(time.Second)
 	// check both stores have keys (rebalance)
@@ -129,6 +130,46 @@ func TestIntegration(t *testing.T) {
 	<-time.After(time.Second)
 	// check succesful transfer back to remaining server
 	assert.True(t, len(keyStores[server].LocalData) == 101, fmt.Sprintf("Length was only %d", mapCount(keyStores[server].LocalData)))
+}
+
+func TestRebalanceIntegration(t *testing.T) {
+	defer cleanNodeBuffers()
+
+	home := newHost()
+	server := AddServer(t, home, home)
+	defer server.Stop()
+
+	server2 := AddServer(t, newHost(), home)
+	defer server2.Stop()
+
+	server3 := AddServer(t, newHost(), home)
+
+	conn := CreateTestClient(home)
+	client := proto.NewHashStoreClient(conn)
+
+	wg := sync.WaitGroup{}
+	for i := 0; i < 100; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			ok, err := client.Put(context.Background(), &proto.KeyData{Key: fmt.Sprintf("key%d", i), Data: fmt.Sprintf("data%d", i)})
+			if err != nil || ok.Ok == false {
+				t.Logf("Cannot set test data: %s", err)
+				t.FailNow()
+			}
+		}(i)
+
+	}
+	wg.Wait()
+
+	server2.Stop()
+
+	<-time.After(time.Second)
+
+	allKeys := len(keyStores[server].LocalData) + len(keyStores[server3].LocalData)
+	assert.True(t, allKeys == 100, fmt.Sprintf("Check that the keys are rebalanced to the other servers, 100 total but found %d", allKeys))
+	assert.True(t, len(keyStores[server2].LocalData) == 0, fmt.Sprintf("Check that store 2 was emptied, should have been zero but got %d", len(keyStores[server2].LocalData)))
+
 }
 
 func mapCount[K comparable, V any](m map[K]V) int {

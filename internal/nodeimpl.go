@@ -50,7 +50,7 @@ func NewNodeImpl(inital []netip.AddrPort, self netip.AddrPort, h hashring.Hasher
 					gotList = true
 					// process list
 				} else {
-					panic(err)
+					log.Printf("error getting node list from %s: %v", r, err)
 				}
 			}
 		} else {
@@ -76,9 +76,11 @@ func (n *NodeImpl) AddNode(ctx context.Context, node *proto.Node) (*emptypb.Empt
 	defer n.nodeLock.Unlock()
 	log.Println("Add a node ", node.Host, node.Port)
 	if peer, err := netip.ParseAddrPort(fmt.Sprintf("%s:%d", node.Host, node.Port)); err == nil {
+
 		client := n.createclient(peer)
 		n.peerList[n.HashPeer(peer)] = client
 		client.AddNode(ctx, &proto.Node{Host: n.self.Addr().String(), Port: uint32(n.self.Port())})
+
 	}
 
 	go func() { n.tryRebalance() }()
@@ -136,6 +138,10 @@ func (n *NodeImpl) GetNode(key string) (proto.HashStoreClient, bool) {
 		peerList = append(peerList, k)
 	}
 
+	// Cover edge case on shutdown where no nodes are left.
+	if len(peerList) == 0 {
+		return nil, true
+	}
 	hash, self := n.GetNodeForHash(crc32, peerList, n.selfHash)
 
 	if self {
