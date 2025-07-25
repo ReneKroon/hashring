@@ -49,7 +49,7 @@ func GetLocalIP() net.IP {
 func (s *Server) Run() error {
 	sigs := make(chan os.Signal, 1)
 
-	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM, syscall.SIGKILL)
 
 	go func() {
 
