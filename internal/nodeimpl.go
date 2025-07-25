@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"math"
 	"net/netip"
 	"sync"
 	"time"
@@ -31,6 +32,7 @@ type NodeImpl struct {
 	rebalancer   func(hashring.Node) (int, int)
 	createclient func(server netip.AddrPort) *Client
 	nodeLock     sync.RWMutex
+	nodeUpdate   chan *proto.Node
 }
 
 func NewNodeImpl(inital []netip.AddrPort, self netip.AddrPort, h hashring.Hasher, k hashring.ServerKey, createclient func(server netip.AddrPort) *Client) hashring.Node {
@@ -46,6 +48,7 @@ func NewNodeImpl(inital []netip.AddrPort, self netip.AddrPort, h hashring.Hasher
 			p[h.HashPeer(r)] = client
 			if !gotList {
 				var err error
+				client.AddNode(context.Background(), &proto.Node{Host: self.Addr().String(), Port: uint32(self.Port())})
 				if list, err = client.NodeStatusClient.GetNodeList(context.Background(), &emptypb.Empty{}); err == nil {
 					gotList = true
 					// process list
@@ -60,30 +63,72 @@ func NewNodeImpl(inital []netip.AddrPort, self netip.AddrPort, h hashring.Hasher
 	}
 	p[h.HashPeer(self)] = nil
 
-	nImpl := &NodeImpl{h, p, h.HashPeer(self), self, proto.UnimplementedNodeStatusServer{}, k.Rebalance, createclient, sync.RWMutex{}}
+	nImpl := &NodeImpl{h, p, h.HashPeer(self), self, proto.UnimplementedNodeStatusServer{}, k.Rebalance, createclient, sync.RWMutex{}, make(chan *proto.Node, 100)}
 	if gotList {
 		for _, node := range list.Node {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 			defer cancel()
 			nImpl.AddNode(ctx, node)
+
 		}
 	}
+	go nImpl.processUpdates()
 	return nImpl
 }
 
-func (n *NodeImpl) AddNode(ctx context.Context, node *proto.Node) (*emptypb.Empty, error) {
-	n.nodeLock.Lock()
-	defer n.nodeLock.Unlock()
-	log.Println("Add a node ", node.Host, node.Port)
-	if peer, err := netip.ParseAddrPort(fmt.Sprintf("%s:%d", node.Host, node.Port)); err == nil {
+func (n *NodeImpl) processUpdates() {
 
-		client := n.createclient(peer)
-		n.peerList[n.HashPeer(peer)] = client
-		client.AddNode(ctx, &proto.Node{Host: n.self.Addr().String(), Port: uint32(n.self.Port())})
+	for {
 
+		var newNodes []*proto.Node
+		node := <-n.nodeUpdate
+		if node == nil {
+			log.Println("Node update is nil, exiting processUpdates")
+			continue
+		}
+		newNodes = append(newNodes, node)
+
+		outstanding := len(n.nodeUpdate)
+		for i := 0; i < outstanding; i++ {
+			newNodes = append(newNodes, <-n.nodeUpdate)
+		}
+
+		for _, node := range newNodes {
+			if node.Port == math.MaxUint32 {
+				log.Println("Node update is a shutdown request, exiting processUpdates")
+				return
+
+			}
+		}
+
+		n.nodeLock.Lock()
+
+		for _, node := range newNodes {
+
+			log.Println("Add a node ", node.Host, node.Port)
+			if peer, err := netip.ParseAddrPort(fmt.Sprintf("%s:%d", node.Host, node.Port)); err == nil && peer != n.self {
+				_, found := n.peerList[n.HashPeer(peer)]
+				if !found {
+					client := n.createclient(peer)
+
+					n.peerList[n.HashPeer(peer)] = client
+
+					ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+
+					client.AddNode(ctx, &proto.Node{Host: n.self.Addr().String(), Port: uint32(n.self.Port())})
+					cancel()
+				}
+			}
+		}
+		n.nodeLock.Unlock()
+		n.tryRebalance()
 	}
 
-	go func() { n.tryRebalance() }()
+}
+
+func (n *NodeImpl) AddNode(ctx context.Context, node *proto.Node) (*emptypb.Empty, error) {
+
+	n.nodeUpdate <- node
 
 	return &emptypb.Empty{}, nil
 }
@@ -152,6 +197,8 @@ func (n *NodeImpl) GetNode(key string) (proto.HashStoreClient, bool) {
 }
 
 func (n *NodeImpl) Shutdown() {
+
+	n.nodeUpdate <- &proto.Node{Host: n.self.Addr().String(), Port: math.MaxUint32} // signal shutdown
 	n.nodeLock.Lock()
 
 	self := &proto.Node{Host: n.self.Addr().String(), Port: uint32(n.self.Port())}

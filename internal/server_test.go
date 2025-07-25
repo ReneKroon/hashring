@@ -111,7 +111,11 @@ func TestIntegration(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			client.Put(context.Background(), &proto.KeyData{Key: fmt.Sprintf("key%d", i), Data: fmt.Sprintf("data%d", i)})
+			ok, err := client.Put(context.Background(), &proto.KeyData{Key: fmt.Sprintf("key%d", i), Data: fmt.Sprintf("data%d", i)})
+			if err != nil || ok.Ok == false {
+				t.Logf("Cannot set test data: %s", err)
+
+			}
 		}(i)
 
 	}
