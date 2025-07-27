@@ -27,6 +27,7 @@ type Client struct {
 
 type NodeImpl struct {
 	hashring.Hasher
+	// peerList should include 'self' with a nil value
 	peerList map[uint32]*Client
 	selfHash uint32
 	self     netip.AddrPort
@@ -41,35 +42,6 @@ type NodeImpl struct {
 
 func NewNodeImpl(inital []netip.AddrPort, self netip.AddrPort, h hashring.Hasher, k hashring.ServerKey, createclient func(server netip.AddrPort) *Client) hashring.Node {
 	p := map[uint32]*Client{}
-	gotList := false
-	var list *proto.NodeList
-	for _, r := range inital {
-		if h.HashPeer(r) == h.HashPeer(self) {
-			continue
-		}
-		if createclient != nil {
-			client := createclient(r)
-			p[h.HashPeer(r)] = client
-			if !gotList {
-				var err error
-				myNode := &proto.Node{Host: self.Addr().String(), Port: uint32(self.Port())}
-
-				if list, err = client.NodeStatusClient.GetNodeList(context.Background(), &proto.NodeList{Node: []*proto.Node{myNode}}); err == nil {
-					gotList = true
-					// process list
-				} else {
-					log.Printf("error getting node list from %s: %v", r, err)
-					p[h.HashPeer(r)].Close()
-					delete(p, h.HashPeer(r))
-
-				}
-			}
-		} else {
-			p[h.HashPeer(r)] = nil
-		}
-
-	}
-	p[h.HashPeer(self)] = nil
 
 	nImpl := &NodeImpl{
 		Hasher:                        h,
@@ -84,13 +56,23 @@ func NewNodeImpl(inital []netip.AddrPort, self netip.AddrPort, h hashring.Hasher
 		done:                          make(chan struct{}),
 		isShutdown:                    atomic.Bool{},
 	}
-	if gotList {
-		for _, node := range list.Node {
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-			defer cancel()
-			nImpl.AddNode(ctx, node)
+
+	for _, v := range inital {
+		if v == self {
+			continue
+		}
+		if createclient != nil {
+
+			nImpl.nodeUpdate <- &proto.Node{
+				Host: v.Addr().String(),
+				Port: uint32(v.Port()),
+			}
+		} else {
+			nImpl.peerList[h.HashPeer(v)] = nil
 		}
 	}
+	p[h.HashPeer(self)] = nil
+
 	go nImpl.processUpdates()
 	go nImpl.findNeighbours(nImpl.done)
 
@@ -130,6 +112,7 @@ func (n *NodeImpl) processUpdates() {
 				_, found := n.peerList[n.HashPeer(peer)]
 				if !found {
 					log.Println("Add a node ", node.Host, node.Port)
+
 					client := n.createclient(peer)
 
 					n.peerList[n.HashPeer(peer)] = client
@@ -231,7 +214,7 @@ func (n *NodeImpl) findNeighbours(done chan struct{}) {
 		case <-timer.C:
 			nodes := []*proto.Node{}
 			for k, p := range n.peerList {
-				if k != n.selfHash {
+				if k != n.selfHash && p != nil {
 					ctx, cancel := context.WithTimeout(context.Background(), time.Second*1)
 					myNode := &proto.Node{Host: n.self.Addr().String(), Port: uint32(n.self.Port())}
 					if list, err := p.GetNodeList(ctx, &proto.NodeList{Node: []*proto.Node{myNode}}); err == nil {
