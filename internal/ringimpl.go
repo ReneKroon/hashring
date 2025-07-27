@@ -72,6 +72,34 @@ func (r SingleRing) Put(ctx context.Context, k *proto.KeyData) (*proto.UpdateSta
 
 }
 
+func (r SingleRing) PutMany(ctx context.Context, k *proto.KeyDataList) (*proto.UpdateStatus, error) {
+	// hash
+	// determine node
+	// store at node
+	p := &proto.UpdateStatus{Ok: true}
+	var err error = nil
+
+	for _, k := range k.KeyData {
+
+		if client, self := r.GetNode(k.Key); self {
+			log.Println("Storing a key")
+			r.k.Put(k.Key, k.Data)
+
+		} else {
+			log.Println("forward ", k.Key)
+			if client == nil || k == nil {
+				panic("client and data should always exist for not self node")
+			}
+			if status, err := client.Put(ctx, k); err != nil || !status.Ok {
+				log.Println("Error forwarding key, storing locally")
+				r.k.Put(k.Key, k.Data)
+
+			}
+		}
+	}
+	return p, err
+}
+
 func (r SingleRing) Remove(ctx context.Context, k *proto.Key) (*proto.UpdateStatus, error) {
 	p := &proto.UpdateStatus{}
 

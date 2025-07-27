@@ -31,6 +31,7 @@ func (s *ServerKeyImpl) Get(key string) (string, bool) {
 	return "", found
 
 }
+
 func (s *ServerKeyImpl) Put(key string, data string) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
@@ -47,6 +48,8 @@ func (s *ServerKeyImpl) Remove(key string) {
 func (s *ServerKeyImpl) Rebalance(node hashring.Node) (kept, sent int) {
 	log.Println("Rebalance!")
 
+	var newDistribution = make(map[proto.HashStoreClient][]*proto.KeyData)
+
 	s.mutex.Lock()
 	startCount := len(s.LocalData)
 	for k, v := range s.LocalData {
@@ -56,18 +59,30 @@ func (s *ServerKeyImpl) Rebalance(node hashring.Node) (kept, sent int) {
 			data := &proto.KeyData{Key: k, Data: v}
 			delete(s.LocalData, k)
 
-			go func() {
-				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-				defer cancel()
-				if client.(*Client) != nil {
-					client.Put(ctx, data)
-				}
-			}()
+			newDistribution[client] = append(newDistribution[client], data)
 		} else {
 			kept++
 		}
 
 	}
+
+	for client, data := range newDistribution {
+		if client.(*Client) == nil {
+			continue
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if status, err := client.PutMany(ctx, &proto.KeyDataList{KeyData: data}); err != nil || !status.Ok {
+			log.Println("Error rebalancing keys to node", client, ":", err)
+			for _, v := range data {
+				log.Println("Rebalancing key", v.Key, " failed, putting it back")
+
+				s.LocalData[v.Key] = v.Data // put it back
+			}
+		}
+
+	}
+
 	s.mutex.Unlock()
 	log.Printf("%d start, %d kept, %d sent", startCount, kept, sent)
 	return kept, sent

@@ -32,7 +32,11 @@ func newHost() netip.AddrPort {
 	return next
 }
 
-func CreateTestClient(server netip.AddrPort) *internal.Client {
+func CreateTestClient(server netip.AddrPort) (*internal.Client, error) {
+
+	if _, ok := buffers[server]; !ok {
+		return nil, fmt.Errorf("no buffer for server %s", server)
+	}
 
 	conn, err := grpc.DialContext(context.Background(), "",
 		grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) {
@@ -40,10 +44,11 @@ func CreateTestClient(server netip.AddrPort) *internal.Client {
 		}), grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		log.Printf("error connecting to server: %v", err)
+		return nil, err
 	}
 
 	//defer conn.Close()
-	return &internal.Client{conn, proto.NewHashStoreClient(conn), proto.NewNodeStatusClient(conn), server}
+	return &internal.Client{conn, proto.NewHashStoreClient(conn), proto.NewNodeStatusClient(conn), server}, nil
 
 }
 
@@ -62,14 +67,14 @@ func cleanNodeBuffers() {
 	}
 }
 
-func AddServer(t *testing.T, home netip.AddrPort, masterNode netip.AddrPort) *internal.Server {
+func AddServer(t *testing.T, home netip.AddrPort, others []netip.AddrPort) *internal.Server {
 
 	lis := addNodeBuffer(home)
 
 	keys := internal.NewServerKeyImpl()
 	hasher := internal.NewHasher()
 
-	node := internal.NewNodeImpl([]netip.AddrPort{masterNode}, home, hasher, keys, CreateTestClient)
+	node := internal.NewNodeImpl(others, home, hasher, keys, CreateTestClient)
 
 	ring := internal.NewRing(node, hasher, keys)
 
@@ -86,11 +91,11 @@ func TestIntegration(t *testing.T) {
 
 	home := newHost()
 
-	server := AddServer(t, home, home)
+	server := AddServer(t, home, []netip.AddrPort{home})
 	defer server.Stop()
 	defer cleanNodeBuffers()
 
-	conn := CreateTestClient(home)
+	conn, _ := CreateTestClient(home)
 
 	client := proto.NewHashStoreClient(conn)
 	nodeClient := proto.NewNodeStatusClient(conn)
@@ -120,7 +125,7 @@ func TestIntegration(t *testing.T) {
 	}
 	wg.Wait()
 
-	server2 := AddServer(t, newHost(), home)
+	server2 := AddServer(t, newHost(), []netip.AddrPort{home})
 
 	<-time.After(time.Second)
 	// check both stores have keys (rebalance)
@@ -139,15 +144,15 @@ func TestRebalanceIntegration(t *testing.T) {
 	defer cleanNodeBuffers()
 
 	home := newHost()
-	server := AddServer(t, home, home)
+	server := AddServer(t, home, []netip.AddrPort{home})
 	defer server.Stop()
 
-	server2 := AddServer(t, newHost(), home)
+	server2 := AddServer(t, newHost(), []netip.AddrPort{home})
 
-	server3 := AddServer(t, newHost(), home)
+	server3 := AddServer(t, newHost(), []netip.AddrPort{home})
 	defer server3.Stop()
 
-	conn := CreateTestClient(home)
+	conn, _ := CreateTestClient(home)
 	client := proto.NewHashStoreClient(conn)
 
 	wg := sync.WaitGroup{}
@@ -173,6 +178,45 @@ func TestRebalanceIntegration(t *testing.T) {
 	assert.True(t, allKeys == 100, fmt.Sprintf("Check that the keys are rebalanced to the other servers, 100 total but found %d", allKeys))
 	assert.True(t, len(keyStores[server2].LocalData) == 0, fmt.Sprintf("Check that store 2 was emptied, should have been zero but got %d", len(keyStores[server2].LocalData)))
 
+}
+
+func TestFailingNodes(t *testing.T) {
+	defer cleanNodeBuffers()
+
+	nonExisting := netip.MustParseAddrPort("172.16.0.1:8888")
+
+	home := newHost()
+	server := AddServer(t, home, []netip.AddrPort{nonExisting, home})
+	server2 := AddServer(t, newHost(), []netip.AddrPort{nonExisting, home})
+	server3 := AddServer(t, newHost(), []netip.AddrPort{nonExisting, home})
+
+	defer server.Stop()
+
+	conn, _ := CreateTestClient(home)
+	client := proto.NewHashStoreClient(conn)
+
+	wg := sync.WaitGroup{}
+	for i := 0; i < 100; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			ok, err := client.Put(context.Background(), &proto.KeyData{Key: fmt.Sprintf("key%d", i), Data: fmt.Sprintf("data%d", i)})
+			if err != nil || ok.Ok == false {
+				t.Logf("Cannot set test data: %s", err)
+				t.FailNow()
+			}
+		}(i)
+
+	}
+	wg.Wait()
+
+	server2.Stop()
+	<-time.After(time.Millisecond * 10)
+	server3.Stop()
+
+	<-time.After(time.Millisecond * 10)
+
+	assert.True(t, len(keyStores[server].LocalData) == 100, fmt.Sprintf("Check that the keys are rebalanced to the other servers, 100 total but found %d", len(keyStores[server].LocalData)))
 }
 
 func mapCount[K comparable, V any](m map[K]V) int {

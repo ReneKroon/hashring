@@ -20,6 +20,11 @@ message KeyData {
  
 }
 
+message KeyDataList {
+     repeated KeyData keyData = 1;
+ 
+}
+
 message UpdateStatus {
      bool ok = 1;
     optional string err = 2;
@@ -36,7 +41,8 @@ message NodeList {
 
 service HashStore {
 	rpc Get( Key) returns ( Data) {}
-	rpc Put( KeyData) returns (UpdateStatus) {}
+     rpc Put( KeyData) returns (UpdateStatus) {}
+     rpc PutMany ( KeyDataList  ) returns (UpdateStatus) {}
 	rpc Remove( Key)    returns (UpdateStatus) {}
 }
 

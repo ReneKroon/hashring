@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"math"
 	"math/rand/v2"
 	"net/netip"
 	"sync"
@@ -33,14 +32,14 @@ type NodeImpl struct {
 	self     netip.AddrPort
 	proto.UnimplementedNodeStatusServer
 	rebalancer   func(hashring.Node) (int, int)
-	createclient func(server netip.AddrPort) *Client
+	createclient func(server netip.AddrPort) (*Client, error)
 	nodeLock     sync.RWMutex
 	nodeUpdate   chan *proto.Node
 	done         chan struct{}
 	isShutdown   atomic.Bool
 }
 
-func NewNodeImpl(inital []netip.AddrPort, self netip.AddrPort, h hashring.Hasher, k hashring.ServerKey, createclient func(server netip.AddrPort) *Client) hashring.Node {
+func NewNodeImpl(inital []netip.AddrPort, self netip.AddrPort, h hashring.Hasher, k hashring.ServerKey, createclient func(server netip.AddrPort) (*Client, error)) hashring.Node {
 	p := map[uint32]*Client{}
 
 	nImpl := &NodeImpl{
@@ -73,35 +72,29 @@ func NewNodeImpl(inital []netip.AddrPort, self netip.AddrPort, h hashring.Hasher
 	}
 	p[h.HashPeer(self)] = nil
 
-	go nImpl.processUpdates()
+	go nImpl.processUpdates(nImpl.done)
 	go nImpl.findNeighbours(nImpl.done)
 
 	return nImpl
 }
 
-func (n *NodeImpl) processUpdates() {
+func (n *NodeImpl) processUpdates(done chan struct{}) {
 
 	for {
 
+		//var node *proto.Node
 		var newNodes []*proto.Node
-		node := <-n.nodeUpdate
-		if node == nil {
-			log.Println("Node update is nil, exiting processUpdates")
-			continue
+		select {
+		case <-done:
+			log.Println("Node update is a shutdown request, exiting processUpdates")
+			return
+		case node := <-n.nodeUpdate:
+			newNodes = append(newNodes, node)
 		}
-		newNodes = append(newNodes, node)
 
 		outstanding := len(n.nodeUpdate)
-		for i := 0; i < outstanding; i++ {
+		for range outstanding {
 			newNodes = append(newNodes, <-n.nodeUpdate)
-		}
-
-		for _, node := range newNodes {
-			if node.Port == math.MaxUint32 {
-				log.Println("Node update is a shutdown request, exiting processUpdates")
-				return
-
-			}
 		}
 
 		n.nodeLock.Lock()
@@ -113,14 +106,17 @@ func (n *NodeImpl) processUpdates() {
 				if !found {
 					log.Println("Add a node ", node.Host, node.Port)
 
-					client := n.createclient(peer)
+					if client, err := n.createclient(peer); err == nil {
 
-					n.peerList[n.HashPeer(peer)] = client
+						n.peerList[n.HashPeer(peer)] = client
 
-					ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+						ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 
-					client.AddNode(ctx, &proto.Node{Host: n.self.Addr().String(), Port: uint32(n.self.Port())})
-					cancel()
+						client.AddNode(ctx, &proto.Node{Host: n.self.Addr().String(), Port: uint32(n.self.Port())})
+						cancel()
+					} else {
+						log.Println("Error creating client for node", peer, ":", err)
+					}
 				}
 			}
 		}
@@ -237,9 +233,8 @@ func (n *NodeImpl) Shutdown() {
 		return
 	}
 
-	close(n.done) // Signal findNeighbours to stop
+	close(n.done) // Signal loops to stop
 
-	n.nodeUpdate <- &proto.Node{Host: n.self.Addr().String(), Port: math.MaxUint32} // signal shutdown
 	n.nodeLock.Lock()
 
 	self := &proto.Node{Host: n.self.Addr().String(), Port: uint32(n.self.Port())}
@@ -278,7 +273,7 @@ func (n *NodeImpl) tryRebalance() {
 	}
 }
 
-func CreateClient(server netip.AddrPort) *Client {
+func CreateClient(server netip.AddrPort) (*Client, error) {
 	var opts []grpc.DialOption
 
 	opts = append(opts, grpc.WithTransportCredentials(insecure.NewCredentials()))
@@ -286,8 +281,9 @@ func CreateClient(server netip.AddrPort) *Client {
 	conn, err := grpc.NewClient(server.String(), opts...)
 	if err != nil {
 		log.Fatalf("fail to dial: %v", err)
+		return nil, err
 	}
 	//defer conn.Close()
-	return &Client{conn, proto.NewHashStoreClient(conn), proto.NewNodeStatusClient(conn), server}
+	return &Client{conn, proto.NewHashStoreClient(conn), proto.NewNodeStatusClient(conn), server}, nil
 
 }
