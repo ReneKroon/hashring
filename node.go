@@ -16,3 +16,15 @@ type Node interface {
 	Shutdown()
 	proto.NodeStatusServer
 }
+
+type NodeStatus int
+
+const (
+	Online NodeStatus = iota
+	Offline
+)
+
+type NodeUpdate struct {
+	Node   *proto.Node
+	Status NodeStatus
+}

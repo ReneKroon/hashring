@@ -127,7 +127,7 @@ func TestIntegration(t *testing.T) {
 
 	server2 := AddServer(t, newHost(), []netip.AddrPort{home})
 
-	<-time.After(time.Second)
+	<-time.After(time.Millisecond * 20)
 	// check both stores have keys (rebalance)
 	assert.True(t, len(keyStores[server].LocalData) > 30, fmt.Sprintf("Length was only %d", mapCount(keyStores[server].LocalData)))
 	assert.True(t, len(keyStores[server2].LocalData) > 30, fmt.Sprintf("Length was only %d", mapCount(keyStores[server2].LocalData)))
