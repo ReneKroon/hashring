@@ -79,12 +79,13 @@ func (r SingleRing) PutMany(ctx context.Context, k *proto.KeyDataList) (*proto.U
 	p := &proto.UpdateStatus{Ok: true}
 	var err error = nil
 
+	keep := []*proto.KeyData{}
+
 	for _, k := range k.KeyData {
 
 		if client, self := r.GetNode(k.Key); self {
 			log.Println("Storing a key")
-			r.k.Put(k.Key, k.Data)
-
+			keep = append(keep, k)
 		} else {
 			log.Println("forward ", k.Key)
 			if client == nil || k == nil {
@@ -97,6 +98,7 @@ func (r SingleRing) PutMany(ctx context.Context, k *proto.KeyDataList) (*proto.U
 			}
 		}
 	}
+	r.k.PutMany(keep)
 	return p, err
 }
 

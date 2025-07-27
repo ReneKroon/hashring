@@ -135,7 +135,7 @@ func TestIntegration(t *testing.T) {
 
 	// the stop will check that no locks occur during rebalancing etc.
 	server2.Stop()
-	<-time.After(time.Second)
+
 	// check succesful transfer back to remaining server
 	assert.True(t, len(keyStores[server].LocalData) == 101, fmt.Sprintf("Length was only %d", mapCount(keyStores[server].LocalData)))
 }
@@ -171,8 +171,6 @@ func TestRebalanceIntegration(t *testing.T) {
 	wg.Wait()
 
 	server2.Stop()
-
-	<-time.After(time.Second)
 
 	allKeys := len(keyStores[server].LocalData) + len(keyStores[server3].LocalData)
 	assert.True(t, allKeys == 100, fmt.Sprintf("Check that the keys are rebalanced to the other servers, 100 total but found %d", allKeys))
@@ -213,8 +211,6 @@ func TestFailingNodes(t *testing.T) {
 	server2.Stop()
 	<-time.After(time.Millisecond * 10)
 	server3.Stop()
-
-	<-time.After(time.Millisecond * 10)
 
 	assert.True(t, len(keyStores[server].LocalData) == 100, fmt.Sprintf("Check that the keys are rebalanced to the other servers, 100 total but found %d", len(keyStores[server].LocalData)))
 }

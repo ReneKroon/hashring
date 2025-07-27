@@ -38,6 +38,17 @@ func (s *ServerKeyImpl) Put(key string, data string) {
 	s.LocalData[key] = data
 
 }
+
+func (s *ServerKeyImpl) PutMany(data []*proto.KeyData) {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	for _, d := range data {
+
+		s.LocalData[d.Key] = d.Data
+	}
+
+}
+
 func (s *ServerKeyImpl) Remove(key string) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
