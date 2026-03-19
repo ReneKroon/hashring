@@ -2,6 +2,7 @@
 
 ## generate protobuf code:
 ```
+brew install protobuf
 protoc hashring.proto --go-grpc_out=./ --go_out=./
 ```
 
