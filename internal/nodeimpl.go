@@ -24,14 +24,16 @@ type Client struct {
 	netip.AddrPort
 }
 
+const VNODE_COUNT = 20
+
 type NodeImpl struct {
 	hashring.Hasher
 	// peerList should include 'self' with a nil value
 	peerList map[uint32]*Client
 	// list of nodes that are not reachable right now
 	offlineList map[uint32]*Client
-	selfHash    uint32
 	self        netip.AddrPort
+	selfHashes  map[uint32]bool
 	proto.UnimplementedNodeStatusServer
 	rebalancer   func(hashring.Node) (int, int)
 	createclient func(server netip.AddrPort) (*Client, error)
@@ -41,14 +43,22 @@ type NodeImpl struct {
 	isShutdown   atomic.Bool
 }
 
+func (n *NodeImpl) getVirtualHashes(peer netip.AddrPort) []uint32 {
+	hashes := make([]uint32, VNODE_COUNT)
+	for i := 0; i < VNODE_COUNT; i++ {
+		hashes[i] = n.HashString(fmt.Sprintf("%s#%d", peer.String(), i))
+	}
+	return hashes
+}
+
 func NewNodeImpl(inital []netip.AddrPort, self netip.AddrPort, h hashring.Hasher, k hashring.ServerKey, createclient func(server netip.AddrPort) (*Client, error)) hashring.Node {
 	p := map[uint32]*Client{}
 
 	nImpl := &NodeImpl{
 		Hasher:                        h,
 		peerList:                      p,
-		selfHash:                      h.HashPeer(self),
 		self:                          self,
+		selfHashes:                    make(map[uint32]bool),
 		UnimplementedNodeStatusServer: proto.UnimplementedNodeStatusServer{},
 		rebalancer:                    k.Rebalance,
 		createclient:                  createclient,
@@ -56,6 +66,11 @@ func NewNodeImpl(inital []netip.AddrPort, self netip.AddrPort, h hashring.Hasher
 		nodeUpdate:                    make(chan hashring.NodeUpdate, 100),
 		done:                          make(chan struct{}),
 		isShutdown:                    atomic.Bool{},
+	}
+
+	for _, v := range nImpl.getVirtualHashes(self) {
+		p[v] = nil
+		nImpl.selfHashes[v] = true
 	}
 
 	for _, v := range inital {
@@ -72,10 +87,11 @@ func NewNodeImpl(inital []netip.AddrPort, self netip.AddrPort, h hashring.Hasher
 				Status: hashring.Online,
 			}
 		} else {
-			nImpl.peerList[h.HashPeer(v)] = nil
+			for _, hash := range nImpl.getVirtualHashes(v) {
+				nImpl.peerList[hash] = nil
+			}
 		}
 	}
-	p[h.HashPeer(self)] = nil
 
 	go nImpl.processUpdates(nImpl.done)
 	go nImpl.findNeighbours(nImpl.done)
@@ -122,12 +138,15 @@ func (n *NodeImpl) processUpdates(done chan struct{}) {
 }
 
 func (n *NodeImpl) addNode(peer netip.AddrPort, node hashring.NodeUpdate) {
-	_, found := n.peerList[n.HashPeer(peer)]
+	hashes := n.getVirtualHashes(peer)
+	_, found := n.peerList[hashes[0]]
 	if !found {
 		log.Println("Add a node ", node.Node.Host, node.Node.Port)
 
 		if client, err := n.createclient(peer); err == nil {
-			n.peerList[n.HashPeer(peer)] = client
+			for _, hash := range hashes {
+				n.peerList[hash] = client
+			}
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 			client.AddNode(ctx, &proto.Node{Host: n.self.Addr().String(), Port: uint32(n.self.Port())})
 			cancel()
@@ -138,16 +157,22 @@ func (n *NodeImpl) addNode(peer netip.AddrPort, node hashring.NodeUpdate) {
 }
 
 func (n *NodeImpl) removeNode(peer netip.AddrPort, node hashring.NodeUpdate) {
-	client, found := n.peerList[n.HashPeer(peer)]
+	hashes := n.getVirtualHashes(peer)
+	client, found := n.peerList[hashes[0]]
 	if found {
-		delete(n.peerList, n.HashPeer(peer))
-		n.offlineList[n.HashPeer(peer)] = client
+		for _, hash := range hashes {
+			delete(n.peerList, hash)
+		}
+		if n.offlineList == nil {
+			n.offlineList = make(map[uint32]*Client)
+		}
+		n.offlineList[hashes[0]] = client
 	}
 }
 
 func (n *NodeImpl) AddNode(ctx context.Context, node *proto.Node) (*emptypb.Empty, error) {
 
-	n.nodeUpdate <- hashring.NodeUpdate{node, hashring.Online}
+	n.nodeUpdate <- hashring.NodeUpdate{Node: node, Status: hashring.Online}
 
 	return &emptypb.Empty{}, nil
 }
@@ -156,12 +181,16 @@ func (n *NodeImpl) GetNodeList(ctx context.Context, newNodes *proto.NodeList) (*
 	n.nodeLock.RLock()
 	defer n.nodeLock.RUnlock()
 
+	uniqueNodes := make(map[netip.AddrPort]bool)
 	list := &proto.NodeList{}
 	for _, v := range n.peerList {
 		if v == nil {
 			continue
 		}
-		list.Node = append(list.Node, &proto.Node{Host: v.Addr().String(), Port: uint32(v.Port())})
+		if _, ok := uniqueNodes[v.AddrPort]; !ok {
+			uniqueNodes[v.AddrPort] = true
+			list.Node = append(list.Node, &proto.Node{Host: v.Addr().String(), Port: uint32(v.Port())})
+		}
 	}
 	list.Node = append(list.Node, &proto.Node{Host: n.self.Addr().String(), Port: uint32(n.self.Port())})
 	return list, nil
@@ -172,8 +201,11 @@ func (n *NodeImpl) RemoveNode(ctx context.Context, node *proto.Node) (*emptypb.E
 
 	if peer, err := netip.ParseAddrPort(fmt.Sprintf("%s:%d", node.Host, node.Port)); err == nil {
 		log.Println("Removing a node ", peer.String())
-		if v, ok := n.peerList[n.HashPeer(peer)]; ok {
-			delete(n.peerList, n.HashPeer(peer))
+		hashes := n.getVirtualHashes(peer)
+		if v, ok := n.peerList[hashes[0]]; ok {
+			for _, hash := range hashes {
+				delete(n.peerList, hash)
+			}
 
 			go func() {
 				v.Close()
@@ -208,14 +240,16 @@ func (n *NodeImpl) GetNode(key string) (proto.HashStoreClient, bool) {
 	if len(peerList) == 0 {
 		return nil, true
 	}
-	hash, self := n.GetNodeForHash(crc32, peerList, n.selfHash)
+	hash, _ := n.GetNodeForHash(crc32, peerList, 0) // Passing 0 for selfHash as we check selfHashes instead
 
-	if self {
+	if n.selfHashes[hash] {
 		return nil, true
 	} else {
 		return n.peerList[hash], false
 	}
 }
+
+const MAX_GOSSIP_PEERS = 3
 
 func (n *NodeImpl) findNeighbours(done chan struct{}) {
 	for {
@@ -226,26 +260,60 @@ func (n *NodeImpl) findNeighbours(done chan struct{}) {
 			timer.Stop()
 			return
 		case <-timer.C:
-			nodes := []*proto.Node{}
-			for k, p := range n.peerList {
-				if k != n.selfHash && p != nil {
-					ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*100)
-					myNode := &proto.Node{Host: n.self.Addr().String(), Port: uint32(n.self.Port())}
-					if list, err := p.GetNodeList(ctx, &proto.NodeList{Node: []*proto.Node{myNode}}); err == nil {
-						nodes = append(nodes, list.Node...)
-					} else {
-						n.nodeUpdate <- hashring.NodeUpdate{
-							Node:   myNode,
-							Status: hashring.Offline,
-						}
-					}
-					cancel()
+			var uniquePeers []*Client
+			n.nodeLock.RLock()
+			peerMap := make(map[*Client]bool)
+			for _, p := range n.peerList {
+				if p != nil && !peerMap[p] {
+					peerMap[p] = true
+					uniquePeers = append(uniquePeers, p)
 				}
 			}
-			for _, v := range nodes {
-				n.nodeUpdate <- hashring.NodeUpdate{
-					Node:   v,
-					Status: hashring.Online,
+			n.nodeLock.RUnlock()
+
+			if len(uniquePeers) == 0 {
+				continue
+			}
+
+			// Randomly shuffle and pick a subset
+			rand.Shuffle(len(uniquePeers), func(i, j int) {
+				uniquePeers[i], uniquePeers[j] = uniquePeers[j], uniquePeers[i]
+			})
+
+			gossipPeers := uniquePeers
+			if len(gossipPeers) > MAX_GOSSIP_PEERS {
+				gossipPeers = gossipPeers[:MAX_GOSSIP_PEERS]
+			}
+
+			nodesDiscovered := []*proto.Node{}
+			myNode := &proto.Node{Host: n.self.Addr().String(), Port: uint32(n.self.Port())}
+
+			for _, p := range gossipPeers {
+				ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*200)
+				if list, err := p.GetNodeList(ctx, &proto.NodeList{Node: []*proto.Node{myNode}}); err == nil {
+					nodesDiscovered = append(nodesDiscovered, list.Node...)
+				} else {
+					log.Println("Error gossiping with peer", p.AddrPort, ":", err)
+					// If a peer fails gossip, we could mark it as offline, 
+					// but let's be conservative for now and just log it.
+				}
+				cancel()
+			}
+
+			for _, v := range nodesDiscovered {
+				// Only update if it's a new node to us
+				if peer, err := netip.ParseAddrPort(fmt.Sprintf("%s:%d", v.Host, v.Port)); err == nil && peer != n.self {
+					n.nodeLock.RLock()
+					hashes := n.getVirtualHashes(peer)
+					_, found := n.peerList[hashes[0]]
+					n.nodeLock.RUnlock()
+
+					if !found {
+						n.nodeUpdate <- hashring.NodeUpdate{
+							Node:   v,
+							Status: hashring.Online,
+						}
+					}
 				}
 			}
 		}
@@ -264,10 +332,15 @@ func (n *NodeImpl) Shutdown() {
 	n.nodeLock.Lock()
 
 	self := &proto.Node{Host: n.self.Addr().String(), Port: uint32(n.self.Port())}
-	delete(n.peerList, n.selfHash)
+	for _, hash := range n.getVirtualHashes(n.self) {
+		delete(n.peerList, hash)
+	}
+
 	var wg sync.WaitGroup
-	for k, p := range n.peerList {
-		if k != n.selfHash {
+	uniqueClients := make(map[*Client]bool)
+	for _, p := range n.peerList {
+		if p != nil && !uniqueClients[p] {
+			uniqueClients[p] = true
 			wg.Add(1)
 			myPeer := p
 			go func() {
