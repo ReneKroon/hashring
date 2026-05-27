@@ -13,4 +13,4 @@ do
     sleep 0.1
 done
 
-echo "All servers started. Use 'pkill -f \"server.go\"' to stop all servers."
+echo "All servers started. Use 'pkill -f \"server -port\"' to stop all servers."
