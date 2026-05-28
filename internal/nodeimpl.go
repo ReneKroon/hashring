@@ -178,6 +178,23 @@ func (n *NodeImpl) AddNode(ctx context.Context, node *proto.Node) (*emptypb.Empt
 }
 
 func (n *NodeImpl) GetNodeList(ctx context.Context, newNodes *proto.NodeList) (*proto.NodeList, error) {
+	// Process incoming nodes from the peer (gossip exchange)
+	for _, v := range newNodes.Node {
+		if peer, err := netip.ParseAddrPort(fmt.Sprintf("%s:%d", v.Host, v.Port)); err == nil && peer != n.self {
+			n.nodeLock.RLock()
+			hashes := n.getVirtualHashes(peer)
+			_, found := n.peerList[hashes[0]]
+			n.nodeLock.RUnlock()
+
+			if !found {
+				n.nodeUpdate <- hashring.NodeUpdate{
+					Node:   v,
+					Status: hashring.Online,
+				}
+			}
+		}
+	}
+
 	n.nodeLock.RLock()
 	defer n.nodeLock.RUnlock()
 
