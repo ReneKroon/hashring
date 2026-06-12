@@ -3,11 +3,20 @@ package internal_test
 import (
 	"fmt"
 	"net/netip"
+	"sort"
 	"testing"
 
 	"github.com/ReneKroon/hashring/internal"
 	"github.com/stretchr/testify/assert"
 )
+
+// sortedHashes returns its inputs sorted ascending — the contract
+// GetNodeForHash now requires of its peerList argument.
+func sortedHashes(hashes ...uint32) []uint32 {
+	out := append([]uint32(nil), hashes...)
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out
+}
 
 func TestMe(t *testing.T) {
 
@@ -27,7 +36,7 @@ func TestGetNodeForHash(t *testing.T) {
 	node2 := h.HashPeer(netip.MustParseAddrPort("192.168.0.1:7071"))
 	node3 := h.HashPeer(netip.MustParseAddrPort("192.168.0.1:7072"))
 
-	nodes := []uint32{self, node2, node3}
+	nodes := sortedHashes(self, node2, node3)
 
 	crc := h.HashString("aKey")
 
@@ -56,7 +65,7 @@ func TestGetNodeForHash_rebalance(t *testing.T) {
 	self := h.HashPeer(netip.MustParseAddrPort("192.168.0.1:7070"))
 	node3 := h.HashPeer(netip.MustParseAddrPort("192.168.0.1:7071"))
 
-	nodes := []uint32{self, node3}
+	nodes := sortedHashes(self, node3)
 
 	t.Logf("Checksum self: %d\n", self)
 	t.Logf("Checksum node3: %d\n", node3)
@@ -84,7 +93,7 @@ func TestGetNodeForHash_order(t *testing.T) {
 	self := h.HashPeer(netip.MustParseAddrPort("192.168.0.1:7070"))
 	node3 := h.HashPeer(netip.MustParseAddrPort("192.168.0.1:7072"))
 
-	nodes := []uint32{self, node3}
+	nodes := sortedHashes(self, node3)
 
 	crc := h.HashString("test368")
 
@@ -94,6 +103,35 @@ func TestGetNodeForHash_order(t *testing.T) {
 
 }
 
+// BenchmarkGetNodeForHash measures owner lookup across realistic ring sizes.
+// vnodes=N covers N peers (e.g. 5 servers × VNODE_COUNT=20 → 100). Input is
+// pre-sorted; both linear and binary-search variants are sort-agnostic in
+// runtime, so this keeps the comparison fair.
+func BenchmarkGetNodeForHash(b *testing.B) {
+	h := internal.HashCrc32{}
+	for _, n := range []int{20, 100, 1000} {
+		b.Run(fmt.Sprintf("vnodes=%d", n), func(b *testing.B) {
+			peers := make([]uint32, n)
+			for i := 0; i < n; i++ {
+				peers[i] = h.HashString(fmt.Sprintf("peer%d:7070", i))
+			}
+			sort.Slice(peers, func(i, j int) bool { return peers[i] < peers[j] })
+
+			const keyCount = 1024
+			keys := make([]uint32, keyCount)
+			for i := 0; i < keyCount; i++ {
+				keys[i] = h.HashString(fmt.Sprintf("key%d", i))
+			}
+
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				h.GetNodeForHash(keys[i&(keyCount-1)], peers, 0)
+			}
+		})
+	}
+}
+
 func TestGetNodeForHash_order_reverse(t *testing.T) {
 
 	h := internal.HashCrc32{}
@@ -101,7 +139,7 @@ func TestGetNodeForHash_order_reverse(t *testing.T) {
 	self := h.HashPeer(netip.MustParseAddrPort("192.168.0.1:7070"))
 	node3 := h.HashPeer(netip.MustParseAddrPort("192.168.0.1:7072"))
 
-	nodes := []uint32{node3, self}
+	nodes := sortedHashes(node3, self)
 
 	crc := h.HashString("test368")
 

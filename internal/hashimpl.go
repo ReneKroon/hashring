@@ -2,8 +2,8 @@ package internal
 
 import (
 	"hash/crc32"
-	"math"
 	"net/netip"
+	"sort"
 
 	"github.com/ReneKroon/hashring"
 )
@@ -60,40 +60,28 @@ func (h HashCrc32) GetNodeForHash(crc32 uint32, peerList []uint32, self uint32) 
 	return getNodeForHash(crc32, peerList, self)
 }
 
+// getNodeForHash returns the owning vnode hash for crc32 on a consistent
+// hash ring. It picks the largest entry in peerList that is <= crc32
+// (predecessor); if no such entry exists, it wraps to the maximum.
+//
+// peerList MUST be sorted ascending. Callers maintain the sort once per
+// topology change so each lookup is O(log n) via binary search rather than
+// O(n). The returned bool reports whether the chosen hash equals self.
 func getNodeForHash(crc32 uint32, peerList []uint32, self uint32) (uint32, bool) {
-	// Find the node that has the checksum just preceding this data checksum
-	// Else it's the last node
-	var maxCrc uint32
-
-	var beforeDelta uint32 = math.MaxUint32
-	var beforeCrc uint32
-
-	var beforeCrcSet = false
-	var maxCrcSet = false
-
-	for _, nodeCrc := range peerList {
-
-		// find max node on ring
-		if nodeCrc > maxCrc {
-			maxCrc = nodeCrc
-			maxCrcSet = true
-		}
-		//
-		if nodeCrc <= crc32 && crc32-nodeCrc < beforeDelta {
-			beforeDelta = crc32 - nodeCrc
-			beforeCrc = nodeCrc
-			beforeCrcSet = true
-		}
-
+	if len(peerList) == 0 {
+		panic("getNodeForHash: empty peer list")
 	}
 
-	if beforeCrcSet {
-		return beforeCrc, beforeCrc == self
+	// First index whose hash is strictly greater than crc32; the predecessor
+	// is the entry immediately before it. If every entry is greater (idx==0)
+	// or every entry is <= (idx==len), we end up at peerList[len-1] — the
+	// ring's maximum, which is the wrap-around owner.
+	idx := sort.Search(len(peerList), func(i int) bool {
+		return peerList[i] > crc32
+	})
+	if idx == 0 {
+		idx = len(peerList)
 	}
-
-	if maxCrcSet {
-		return maxCrc, maxCrc == self
-	}
-
-	panic("Shouldn not get here")
+	hash := peerList[idx-1]
+	return hash, hash == self
 }

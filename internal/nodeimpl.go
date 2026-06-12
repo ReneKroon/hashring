@@ -6,6 +6,7 @@ import (
 	"log"
 	"math/rand/v2"
 	"net/netip"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -30,6 +31,10 @@ type NodeImpl struct {
 	hashring.Hasher
 	// peerList should include 'self' with a nil value
 	peerList map[uint32]*Client
+	// sortedPeerHashes mirrors keys(peerList) in ascending order. Kept in
+	// sync by rebuildSortedPeerHashes so owner lookup can call the shared
+	// binary-search-based getNodeForHash without sorting on every Get/Put.
+	sortedPeerHashes []uint32
 	// list of nodes that are not reachable right now
 	offlineList map[uint32]*Client
 	self        netip.AddrPort
@@ -92,6 +97,7 @@ func NewNodeImpl(inital []netip.AddrPort, self netip.AddrPort, h hashring.Hasher
 			}
 		}
 	}
+	nImpl.rebuildSortedPeerHashes()
 
 	go nImpl.processUpdates(nImpl.done)
 	go nImpl.findNeighbours(nImpl.done)
@@ -137,6 +143,23 @@ func (n *NodeImpl) processUpdates(done chan struct{}) {
 
 }
 
+// rebuildSortedPeerHashes refreshes the ascending vnode-hash slice that
+// getNodeForHash needs. Must be called under nodeLock after any mutation
+// of peerList.
+func (n *NodeImpl) rebuildSortedPeerHashes() {
+	if cap(n.sortedPeerHashes) >= len(n.peerList) {
+		n.sortedPeerHashes = n.sortedPeerHashes[:0]
+	} else {
+		n.sortedPeerHashes = make([]uint32, 0, len(n.peerList))
+	}
+	for h := range n.peerList {
+		n.sortedPeerHashes = append(n.sortedPeerHashes, h)
+	}
+	sort.Slice(n.sortedPeerHashes, func(i, j int) bool {
+		return n.sortedPeerHashes[i] < n.sortedPeerHashes[j]
+	})
+}
+
 func (n *NodeImpl) addNode(peer netip.AddrPort, node hashring.NodeUpdate) {
 	hashes := n.getVirtualHashes(peer)
 	_, found := n.peerList[hashes[0]]
@@ -147,6 +170,7 @@ func (n *NodeImpl) addNode(peer netip.AddrPort, node hashring.NodeUpdate) {
 			for _, hash := range hashes {
 				n.peerList[hash] = client
 			}
+			n.rebuildSortedPeerHashes()
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 			client.AddNode(ctx, &proto.Node{Host: n.self.Addr().String(), Port: uint32(n.self.Port())})
 			cancel()
@@ -163,6 +187,7 @@ func (n *NodeImpl) removeNode(peer netip.AddrPort, node hashring.NodeUpdate) {
 		for _, hash := range hashes {
 			delete(n.peerList, hash)
 		}
+		n.rebuildSortedPeerHashes()
 		if n.offlineList == nil {
 			n.offlineList = make(map[uint32]*Client)
 		}
@@ -223,6 +248,7 @@ func (n *NodeImpl) RemoveNode(ctx context.Context, node *proto.Node) (*emptypb.E
 			for _, hash := range hashes {
 				delete(n.peerList, hash)
 			}
+			n.rebuildSortedPeerHashes()
 
 			go func() {
 				v.Close()
@@ -241,29 +267,22 @@ func (n *NodeImpl) GetSelf() (peer netip.AddrPort) {
 
 // Returns the remote HashStoreClient, nil, true if this node is the right node for the data.
 func (n *NodeImpl) GetNode(key string) (proto.HashStoreClient, bool) {
-
-	// Find the node that has the checksum just preceding this data checksum
-	// Else it's the last node
 	crc32 := n.HashString(key)
 
-	peerList := []uint32{}
 	n.nodeLock.RLock()
 	defer n.nodeLock.RUnlock()
-	for k := range n.peerList {
-		peerList = append(peerList, k)
-	}
 
 	// Cover edge case on shutdown where no nodes are left.
-	if len(peerList) == 0 {
+	if len(n.sortedPeerHashes) == 0 {
 		return nil, true
 	}
-	hash, _ := n.GetNodeForHash(crc32, peerList, 0) // Passing 0 for selfHash as we check selfHashes instead
+	// Pass 0 as selfHash; we identify self via the selfHashes set below.
+	hash, _ := n.GetNodeForHash(crc32, n.sortedPeerHashes, 0)
 
 	if n.selfHashes[hash] {
 		return nil, true
-	} else {
-		return n.peerList[hash], false
 	}
+	return n.peerList[hash], false
 }
 
 const MAX_GOSSIP_PEERS = 3
@@ -352,6 +371,7 @@ func (n *NodeImpl) Shutdown() {
 	for _, hash := range n.getVirtualHashes(n.self) {
 		delete(n.peerList, hash)
 	}
+	n.rebuildSortedPeerHashes()
 
 	var wg sync.WaitGroup
 	uniqueClients := make(map[*Client]bool)

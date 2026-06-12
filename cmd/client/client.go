@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"math/rand/v2"
+	"sort"
 	"sync"
 	"time"
 
@@ -22,20 +23,82 @@ type ResilientClient struct {
 	mu          sync.RWMutex
 	connections map[string]*grpc.ClientConn
 	servers     []string
+	hasher      internal.HashCrc32
+	ring        map[uint32]string // vnode hash -> server address
+	vnodeHashes []uint32          // all vnode hashes, passed to Hasher.GetNodeForHash
+	// seeds are bootstrap servers supplied at construction. They are pinned
+	// in the connection pool so a gossip response that happens to omit them
+	// (e.g. queried peer doesn't know about a momentarily dead seed) doesn't
+	// drop our only way back into the cluster. Read-only after construction.
+	seeds map[string]bool
+	// online tracks per-server reachability based on the periodic health
+	// probe in monitorNodes. Only online servers contribute vnodes to
+	// `ring`/`vnodeHashes`, so consistent-hash lookups naturally route
+	// around dead nodes until they recover.
+	online map[string]bool
 }
 
-func NewResilientClient(initialServer string) (*ResilientClient, error) {
+func NewResilientClient(initialServers []string) (*ResilientClient, error) {
+	if len(initialServers) == 0 {
+		return nil, fmt.Errorf("at least one seed server is required")
+	}
 	rc := &ResilientClient{
 		connections: make(map[string]*grpc.ClientConn),
 		servers:     []string{},
+		hasher:      internal.HashCrc32{},
+		ring:        make(map[uint32]string),
+		vnodeHashes: []uint32{},
+		seeds:       make(map[string]bool, len(initialServers)),
+		online:      make(map[string]bool),
 	}
 
-	// Connect to initial server
-	if err := rc.addServer(initialServer); err != nil {
-		return nil, fmt.Errorf("failed to connect to initial server: %w", err)
+	for _, s := range initialServers {
+		if rc.seeds[s] {
+			continue
+		}
+		rc.seeds[s] = true
+		if err := rc.addServer(s); err != nil {
+			return nil, fmt.Errorf("failed to connect to seed %s: %w", s, err)
+		}
 	}
 
 	return rc, nil
+}
+
+const VNODE_COUNT = 20
+
+func (rc *ResilientClient) getVirtualHashes(server string) []uint32 {
+	hashes := make([]uint32, VNODE_COUNT)
+	for i := 0; i < VNODE_COUNT; i++ {
+		hashes[i] = rc.hasher.HashString(fmt.Sprintf("%s#%d", server, i))
+	}
+	return hashes
+}
+
+// rebuildRing rebuilds the consistent-hash ring from servers currently
+// marked online. Offline servers are skipped so their key range fails over
+// to the next online vnode in the ring. Callers must hold rc.mu.
+func (rc *ResilientClient) rebuildRing() {
+	rc.ring = make(map[uint32]string)
+	rc.vnodeHashes = rc.vnodeHashes[:0]
+
+	for _, server := range rc.servers {
+		// Exclude only servers the health probe has explicitly marked
+		// offline. Absent entries (e.g. just-added or never-probed) are
+		// presumed reachable; the next probe cycle corrects the state.
+		if online, set := rc.online[server]; set && !online {
+			continue
+		}
+		for _, hash := range rc.getVirtualHashes(server) {
+			rc.ring[hash] = server
+			rc.vnodeHashes = append(rc.vnodeHashes, hash)
+		}
+	}
+	// Keep vnodeHashes sorted ascending so getClientForKey can call the
+	// shared Hasher.GetNodeForHash, which requires sorted input.
+	sort.Slice(rc.vnodeHashes, func(i, j int) bool {
+		return rc.vnodeHashes[i] < rc.vnodeHashes[j]
+	})
 }
 
 func (rc *ResilientClient) addServer(server string) error {
@@ -57,6 +120,11 @@ func (rc *ResilientClient) addServer(server string) error {
 
 	rc.connections[server] = conn
 	rc.servers = append(rc.servers, server)
+	// Assume reachable until the next health probe says otherwise. Routing
+	// to a freshly-added but actually-dead seed costs one failed request
+	// before the probe corrects the state.
+	rc.online[server] = true
+	rc.rebuildRing()
 	log.Printf("Connected to server: %s", server)
 	return nil
 }
@@ -68,6 +136,7 @@ func (rc *ResilientClient) removeServer(server string) {
 	if conn, exists := rc.connections[server]; exists {
 		conn.Close()
 		delete(rc.connections, server)
+		delete(rc.online, server)
 
 		// Remove from servers list
 		for i, s := range rc.servers {
@@ -76,22 +145,77 @@ func (rc *ResilientClient) removeServer(server string) {
 				break
 			}
 		}
+		rc.rebuildRing()
 		log.Printf("Disconnected from server: %s", server)
 	}
+}
+
+// getClientForKey finds the server responsible for a key using consistent hashing
+func (rc *ResilientClient) getClientForKey(key string) (proto.HashStoreClient, string, error) {
+	rc.mu.RLock()
+	defer rc.mu.RUnlock()
+
+	// vnodeHashes only contains entries for online servers; if it's empty,
+	// every known server is currently marked offline.
+	if len(rc.vnodeHashes) == 0 {
+		return nil, "", fmt.Errorf("no online servers available")
+	}
+
+	// Hash the key and pick the owning vnode using the shared selection
+	// function on the Hasher interface (hash.go). Going through the same
+	// implementation as the server (internal/hashimpl.go:getNodeForHash)
+	// guarantees the client and server agree on the owner, so requests
+	// land directly on the correct node instead of being forwarded.
+	keyHash := rc.hasher.HashString(key)
+	vnodeHash, _ := rc.hasher.GetNodeForHash(keyHash, rc.vnodeHashes, 0)
+	server := rc.ring[vnodeHash]
+	conn := rc.connections[server]
+
+	return proto.NewHashStoreClient(conn), server, nil
 }
 
 func (rc *ResilientClient) getRandomClient() (proto.HashStoreClient, string, error) {
 	rc.mu.RLock()
 	defer rc.mu.RUnlock()
 
-	if len(rc.servers) == 0 {
-		return nil, "", fmt.Errorf("no servers available")
+	// Restrict the retry pool to servers the health probe hasn't marked
+	// offline; falling back onto a known-dead server just wastes a timeout.
+	candidates := make([]string, 0, len(rc.servers))
+	for _, s := range rc.servers {
+		if online, set := rc.online[s]; set && !online {
+			continue
+		}
+		candidates = append(candidates, s)
 	}
-
-	// Pick a random server
-	server := rc.servers[rand.IntN(len(rc.servers))]
+	if len(candidates) == 0 {
+		return nil, "", fmt.Errorf("no online servers available")
+	}
+	server := candidates[rand.IntN(len(candidates))]
 	conn := rc.connections[server]
 	return proto.NewHashStoreClient(conn), server, nil
+}
+
+// setOnline updates a server's reachability state and rebuilds the ring
+// if it actually changed. Safe to call from the health probe goroutine.
+func (rc *ResilientClient) setOnline(server string, isOnline bool) {
+	rc.mu.Lock()
+	defer rc.mu.Unlock()
+
+	// Ignore updates for servers we've since dropped from the pool.
+	if _, known := rc.connections[server]; !known {
+		return
+	}
+	prev, exists := rc.online[server]
+	if exists && prev == isOnline {
+		return
+	}
+	rc.online[server] = isOnline
+	rc.rebuildRing()
+	if isOnline {
+		log.Printf("Server %s back online", server)
+	} else {
+		log.Printf("Server %s marked offline", server)
+	}
 }
 
 func (rc *ResilientClient) getAllNodeStatusClients() []struct {
@@ -137,7 +261,9 @@ func (rc *ResilientClient) UpdateServerList(nodeList *proto.NodeList) {
 	rc.mu.RUnlock()
 
 	for _, server := range existingServers {
-		if !currentServers[server] {
+		// Keep seeds in the pool even if the latest gossip response omits
+		// them — they're the fallback path for when other peers go away.
+		if !currentServers[server] && !rc.seeds[server] {
 			rc.removeServer(server)
 		}
 	}
@@ -156,25 +282,25 @@ func (rc *ResilientClient) Close() {
 
 // Resilient operations with automatic retry
 func (rc *ResilientClient) Get(ctx context.Context, key *proto.Key) (*proto.Data, error) {
-	return retryOperation(ctx, rc, func(client proto.HashStoreClient) (*proto.Data, error) {
+	return retryOperationWithKey(ctx, rc, key.Key, func(client proto.HashStoreClient) (*proto.Data, error) {
 		return client.Get(ctx, key)
 	})
 }
 
 func (rc *ResilientClient) Put(ctx context.Context, keyData *proto.KeyData) (*proto.UpdateStatus, error) {
-	return retryOperation(ctx, rc, func(client proto.HashStoreClient) (*proto.UpdateStatus, error) {
+	return retryOperationWithKey(ctx, rc, keyData.Key, func(client proto.HashStoreClient) (*proto.UpdateStatus, error) {
 		return client.Put(ctx, keyData)
 	})
 }
 
 func (rc *ResilientClient) Remove(ctx context.Context, key *proto.Key) (*proto.UpdateStatus, error) {
-	return retryOperation(ctx, rc, func(client proto.HashStoreClient) (*proto.UpdateStatus, error) {
+	return retryOperationWithKey(ctx, rc, key.Key, func(client proto.HashStoreClient) (*proto.UpdateStatus, error) {
 		return client.Remove(ctx, key)
 	})
 }
 
-// retryOperation tries the operation on different servers until success or all servers fail
-func retryOperation[T any](_ context.Context, rc *ResilientClient, operation func(proto.HashStoreClient) (T, error)) (T, error) {
+// retryOperationWithKey tries the operation on the correct server first (based on key hash), then falls back to others
+func retryOperationWithKey[T any](_ context.Context, rc *ResilientClient, key string, operation func(proto.HashStoreClient) (T, error)) (T, error) {
 	var lastErr error
 	var zero T
 
@@ -182,8 +308,22 @@ func retryOperation[T any](_ context.Context, rc *ResilientClient, operation fun
 	serverCount := len(rc.servers)
 	rc.mu.RUnlock()
 
-	// Try up to the number of available servers
-	for attempt := range serverCount {
+	// First try: use consistent hashing to find the right server
+	client, server, err := rc.getClientForKey(key)
+	if err != nil {
+		return zero, err
+	}
+
+	result, err := operation(client)
+	if err == nil {
+		return result, nil
+	}
+
+	lastErr = err
+	log.Printf("Primary server %s failed for key %s: %v", server, key, err)
+
+	// Retry on other servers if primary fails
+	for attempt := 1; attempt < serverCount; attempt++ {
 		client, server, err := rc.getRandomClient()
 		if err != nil {
 			return zero, err
@@ -209,9 +349,18 @@ func retryOperation[T any](_ context.Context, rc *ResilientClient, operation fun
 func main() {
 	flag.Parse()
 
-	initialServer := fmt.Sprintf("%s:%d", internal.GetLocalIP(), *port)
+	// Always include the conventional bootstrap peer (port 7070) alongside
+	// the -port flag, mirroring the server (cmd/server/server.go) which
+	// seeds itself with 7070 regardless of its own port. This gives the
+	// client a second starter node so it can still reach the cluster when
+	// 7070 is down at startup.
+	localIP := internal.GetLocalIP()
+	seeds := []string{
+		fmt.Sprintf("%s:%d", localIP, 7070),
+		fmt.Sprintf("%s:%d", localIP, *port),
+	}
 
-	client, err := NewResilientClient(initialServer)
+	client, err := NewResilientClient(seeds)
 	if err != nil {
 		log.Fatalf("Failed to create resilient client: %v", err)
 	}
@@ -269,9 +418,12 @@ func monitorNodes(rc *ResilientClient) {
 	var previousNodes map[string]bool
 
 	for {
-		time.Sleep(5 * time.Second)
+		time.Sleep(2 * time.Second)
 
-		// Try to get node list from any available server
+		// Probe every server in the pool. A short per-request timeout keeps
+		// detection latency bounded when a node is unreachable; the result
+		// doubles as both a health signal (setOnline) and, on success,
+		// fresh peer-discovery input for UpdateServerList.
 		clients := rc.getAllNodeStatusClients()
 		if len(clients) == 0 {
 			log.Println("No servers available to query node list")
@@ -279,22 +431,28 @@ func monitorNodes(rc *ResilientClient) {
 		}
 
 		var nodeList *proto.NodeList
-		var err error
+		anySuccess := false
 
-		// Try each server until we get a successful response
 		for _, c := range clients {
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-			nodeList, err = c.client.GetNodeList(ctx, &proto.NodeList{})
+			ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+			list, err := c.client.GetNodeList(ctx, &proto.NodeList{})
 			cancel()
 
-			if err == nil {
-				break
+			if err != nil {
+				rc.setOnline(c.server, false)
+				continue
 			}
-			log.Printf("Failed to get node list from %s: %v", c.server, err)
+			rc.setOnline(c.server, true)
+			if !anySuccess {
+				// Any single peer's view is good enough for peer discovery;
+				// the first successful response wins this tick.
+				nodeList = list
+				anySuccess = true
+			}
 		}
 
-		if err != nil {
-			log.Println("Failed to get node list from all servers")
+		if !anySuccess {
+			log.Println("All servers unreachable this tick")
 			continue
 		}
 
