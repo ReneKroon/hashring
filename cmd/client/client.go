@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"log"
 	"math/rand/v2"
-	"sort"
+	"slices"
 	"sync"
 	"time"
 
@@ -69,7 +69,7 @@ const VNODE_COUNT = 20
 
 func (rc *ResilientClient) getVirtualHashes(server string) []uint32 {
 	hashes := make([]uint32, VNODE_COUNT)
-	for i := 0; i < VNODE_COUNT; i++ {
+	for i := range VNODE_COUNT {
 		hashes[i] = rc.hasher.HashString(fmt.Sprintf("%s#%d", server, i))
 	}
 	return hashes
@@ -96,9 +96,7 @@ func (rc *ResilientClient) rebuildRing() {
 	}
 	// Keep vnodeHashes sorted ascending so getClientForKey can call the
 	// shared Hasher.GetNodeForHash, which requires sorted input.
-	sort.Slice(rc.vnodeHashes, func(i, j int) bool {
-		return rc.vnodeHashes[i] < rc.vnodeHashes[j]
-	})
+	slices.Sort(rc.vnodeHashes)
 }
 
 func (rc *ResilientClient) addServer(server string) error {

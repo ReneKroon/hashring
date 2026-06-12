@@ -3,7 +3,7 @@ package internal_test
 import (
 	"fmt"
 	"net/netip"
-	"sort"
+	"slices"
 	"testing"
 
 	"github.com/ReneKroon/hashring/internal"
@@ -14,7 +14,7 @@ import (
 // GetNodeForHash now requires of its peerList argument.
 func sortedHashes(hashes ...uint32) []uint32 {
 	out := append([]uint32(nil), hashes...)
-	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	slices.Sort(out)
 	return out
 }
 
@@ -49,7 +49,7 @@ func TestGetNodeForHash(t *testing.T) {
 	assert.Equal(t, isSelf, true, "Selected node should be self")
 
 	results := map[uint32]int{}
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		host, _ := h.GetNodeForHash(h.HashString(fmt.Sprintf("key%d", i*101)), nodes, self)
 		results[host]++
 	}
@@ -71,7 +71,7 @@ func TestGetNodeForHash_rebalance(t *testing.T) {
 	t.Logf("Checksum node3: %d\n", node3)
 
 	selfcount := 0
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		input := fmt.Sprintf("key%d", 101*i)
 		_, me := h.GetNodeForHash(h.HashString(input), nodes, self)
 		//t.Logf("Checksum: %d\n", h.HashString(input))
@@ -112,14 +112,14 @@ func BenchmarkGetNodeForHash(b *testing.B) {
 	for _, n := range []int{20, 100, 1000} {
 		b.Run(fmt.Sprintf("vnodes=%d", n), func(b *testing.B) {
 			peers := make([]uint32, n)
-			for i := 0; i < n; i++ {
+			for i := range n {
 				peers[i] = h.HashString(fmt.Sprintf("peer%d:7070", i))
 			}
-			sort.Slice(peers, func(i, j int) bool { return peers[i] < peers[j] })
+			slices.Sort(peers)
 
 			const keyCount = 1024
 			keys := make([]uint32, keyCount)
-			for i := 0; i < keyCount; i++ {
+			for i := range keyCount {
 				keys[i] = h.HashString(fmt.Sprintf("key%d", i))
 			}
 

@@ -6,7 +6,7 @@ import (
 	"log"
 	"math/rand/v2"
 	"net/netip"
-	"sort"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -50,7 +50,7 @@ type NodeImpl struct {
 
 func (n *NodeImpl) getVirtualHashes(peer netip.AddrPort) []uint32 {
 	hashes := make([]uint32, VNODE_COUNT)
-	for i := 0; i < VNODE_COUNT; i++ {
+	for i := range VNODE_COUNT {
 		hashes[i] = n.HashString(fmt.Sprintf("%s#%d", peer.String(), i))
 	}
 	return hashes
@@ -155,9 +155,7 @@ func (n *NodeImpl) rebuildSortedPeerHashes() {
 	for h := range n.peerList {
 		n.sortedPeerHashes = append(n.sortedPeerHashes, h)
 	}
-	sort.Slice(n.sortedPeerHashes, func(i, j int) bool {
-		return n.sortedPeerHashes[i] < n.sortedPeerHashes[j]
-	})
+	slices.Sort(n.sortedPeerHashes)
 }
 
 func (n *NodeImpl) addNode(peer netip.AddrPort, node hashring.NodeUpdate) {
@@ -330,7 +328,7 @@ func (n *NodeImpl) findNeighbours(done chan struct{}) {
 					nodesDiscovered = append(nodesDiscovered, list.Node...)
 				} else {
 					log.Println("Error gossiping with peer", p.AddrPort, ":", err)
-					// If a peer fails gossip, we could mark it as offline, 
+					// If a peer fails gossip, we could mark it as offline,
 					// but let's be conservative for now and just log it.
 				}
 				cancel()

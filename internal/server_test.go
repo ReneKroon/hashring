@@ -111,7 +111,7 @@ func TestIntegration(t *testing.T) {
 	assert.Equal(t, "data", *data.Data, "Message Data should have been found")
 
 	wg := sync.WaitGroup{}
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
@@ -156,7 +156,7 @@ func TestRebalanceIntegration(t *testing.T) {
 	client := proto.NewHashStoreClient(conn)
 
 	wg := sync.WaitGroup{}
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
@@ -194,7 +194,7 @@ func TestFailingNodes(t *testing.T) {
 	client := proto.NewHashStoreClient(conn)
 
 	wg := sync.WaitGroup{}
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()

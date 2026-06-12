@@ -19,7 +19,7 @@ func TestRebalance(t *testing.T) {
 
 	k := internal.NewServerKeyImpl()
 	node := internal.NewNodeImpl(nodes, self, h, k, nil)
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		k.Put(fmt.Sprintf("key%d", i*101), "data")
 	}
 
